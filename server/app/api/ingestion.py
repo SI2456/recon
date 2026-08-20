@@ -1,0 +1,329 @@
+import hashlib
+import json
+import re
+from pathlib import PurePosixPath, PureWindowsPath
+
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from app.api.deps import ensure_client_scope, get_current_user, require_roles, scoped_client_ids
+from app.core import roles
+from app.db.models import Client, Invoice, SourceType, Upload, User
+from app.db.session import SessionLocal, get_db
+from app.services.parsing import parse_upload
+from app.services.reconciliation import normalize_key
+from app.services.storage import read_bytes, upload_bytes
+
+
+router = APIRouter()
+
+STATUS_PROCESSING = "processing"
+# Statuses a document can sit in once a run has finished, either way.
+TERMINAL_STATUSES = {"parsed", "parsed_with_warnings", "processed", "failed"}
+
+_GSTR_FILE_TYPES = {"gstr", "gstr-2a", "gstr-2b", "gstr2a", "gstr2b", "gstr1"}
+
+
+
+class VisibilityRequest(BaseModel):
+    visible: bool
+
+
+def safe_file_name(raw: str) -> str:
+    """Reduce a client-supplied filename to a single safe path segment.
+
+    The uploaded name is attacker-controlled and is concatenated into the
+    storage object key, so it must not be able to escape the upload root or
+    address a drive/UNC path. Strips any directory component (POSIX *and*
+    Windows separators, since the client OS is unknown), then allows only a
+    conservative character set.
+    """
+    candidate = PureWindowsPath(PurePosixPath(raw or "").name).name
+    candidate = re.sub(r"[^A-Za-z0-9._-]", "_", candidate).lstrip(".")
+    # Collapse to a default when the name was entirely separators/dots
+    # (e.g. "..", "../", "") or reduced to nothing by the filter.
+    if not candidate:
+        return "upload"
+    # Truncate the stem rather than the whole name: parse_upload dispatches on
+    # the extension, so a long filename must not lose its ".csv"/".pdf" tail.
+    stem, dot, suffix = candidate.rpartition(".")
+    if dot and 0 < len(suffix) <= 10:
+        return f"{stem[:180 - len(suffix) - 1]}.{suffix}"
+    return candidate[:180]
+
+
+_SOURCE_TYPE_VALUES = {item.value for item in SourceType}
+
+# What a plain file kind implies about its origin, when the uploader does not
+# say. GST statements are exports the user pulled from the portal; books data
+# comes out of the accounting system.
+_SOURCE_TYPE_BY_KIND = {
+    "gstr": SourceType.gst_export,
+    "gstr-2a": SourceType.gst_export,
+    "gstr-2b": SourceType.gst_export,
+    "gstr2a": SourceType.gst_export,
+    "gstr2b": SourceType.gst_export,
+    "gstr1": SourceType.gst_export,
+    "books": SourceType.accounting_export,
+    "purchase_register": SourceType.accounting_export,
+    "sales_register": SourceType.accounting_export,
+}
+
+
+def resolve_source_type(declared: str, kind: str) -> str:
+    """Provenance for an upload: what the uploader declared, else inferred.
+
+    Recording this means the origin of a figure can always be stated — whether
+    a GST statement was exported from the portal by the user or generated for
+    testing — instead of being assumed.
+    """
+    value = (declared or "").strip().upper()
+    if value in _SOURCE_TYPE_VALUES:
+        return value
+    inferred = _SOURCE_TYPE_BY_KIND.get((kind or "").strip().lower())
+    return (inferred or SourceType.user_upload).value
+
+
+def ingest_invoices(db: Session, upload: Upload, source: str, rows) -> int:
+    """Persist parsed rows as Invoice records tied to this upload."""
+    created = 0
+    for row in rows:
+        db.add(
+            Invoice(
+                client_id=upload.client_id,
+                upload_id=upload.id,
+                invoice_no=row.invoice_no,
+                supplier=row.supplier,
+                supplier_gstin=row.supplier_gstin,
+                invoice_date=row.invoice_date,
+                taxable=row.taxable,
+                gst=row.gst,
+                total=row.total,
+                hsn=row.hsn,
+                cgst=row.cgst,
+                sgst=row.sgst,
+                igst=row.igst,
+                cess=row.cess,
+                recipient_gstin=row.recipient_gstin,
+                place_of_supply=row.place_of_supply,
+                document_type=row.document_type,
+                source=source,
+                normalized_key=normalize_key(row.invoice_no, row.supplier_gstin),
+            )
+        )
+        created += 1
+    return created
+
+
+def reset_stalled_processing() -> None:
+    """Clear rows left mid-flight by a restart.
+
+    A background task dies with the process, so anything still marked
+    "processing" at startup will never finish on its own. Without this the
+    document is stuck forever and the 409 guard refuses to retry it.
+    """
+    db = SessionLocal()
+    try:
+        stalled = db.query(Upload).filter(Upload.status == STATUS_PROCESSING).all()
+        for upload in stalled:
+            upload.status = "uploaded"
+            upload.validation_errors = json.dumps(
+                ["Processing was interrupted when the server restarted. Run Process again."]
+            )
+        if stalled:
+            db.commit()
+            print(f"[ingestion] reset {len(stalled)} interrupted upload(s) to 'uploaded'")
+    finally:
+        db.close()
+
+
+@router.post("/upload", status_code=201)
+async def upload_document(
+    clientId: int | None = Form(None),
+    source: str = Form("books"),
+    gstin: str = Form(""),
+    financialYear: str = Form(""),
+    taxPeriod: str = Form(""),
+    documentType: str = Form(""),
+    sourceType: str = Form(""),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    if clientId is None:
+        client_ids = scoped_client_ids(db, user)
+        if not client_ids:
+            raise HTTPException(status_code=404, detail="No client workspace is linked to this account.")
+        clientId = client_ids[0]
+
+    ensure_client_scope(db, user, clientId)
+    content = await file.read()
+    stored_name = safe_file_name(file.filename or "")
+    # A checksum makes a re-upload of the same bytes identifiable, and the
+    # period metadata is what lets a GST statement be compared to anything.
+    checksum = hashlib.sha256(content).hexdigest()
+    object_key = f"clients/{clientId}/uploads/{stored_name}"
+    upload_bytes(object_key, content, file.content_type or "application/octet-stream")
+
+    # Store only — OCR/parsing runs later when the CA presses Process.
+    upload = Upload(
+        client_id=clientId,
+        uploaded_by=user.id,
+        file_name=stored_name,
+        file_type=source,
+        object_key=object_key,
+        gstin=re.sub(r"[^A-Z0-9]", "", gstin.upper())[:15],
+        financial_year=financialYear.strip()[:12],
+        tax_period=taxPeriod.strip()[:12],
+        document_type=(documentType.strip() or source).lower()[:40],
+        source_type=resolve_source_type(sourceType, source),
+        checksum=checksum,
+        status="uploaded",
+        visible_to_client=False,
+    )
+    db.add(upload)
+    db.commit()
+    db.refresh(upload)
+    return {"upload": serialize_upload(db, upload)}
+
+
+def _invoice_source(file_type: str) -> str:
+    return "gstr" if str(file_type).strip().lower() in _GSTR_FILE_TYPES else "books"
+
+
+async def run_processing(upload_id: int) -> None:
+    """Parse a stored document and record the outcome on the upload row.
+
+    Runs after the response has been sent, so it opens its own session — the
+    request-scoped one from ``get_db`` is already closed by this point.
+
+    OCR on a scanned invoice takes minutes, and the heavy work happens in a
+    worker thread (see services/vision_ocr), so awaiting it here does not block
+    the event loop or any other request.
+    """
+    db = SessionLocal()
+    try:
+        upload = db.get(Upload, upload_id)
+        if upload is None:
+            return
+
+        try:
+            content = read_bytes(upload.object_key)
+        except (FileNotFoundError, OSError):
+            upload.status = "failed"
+            upload.validation_errors = json.dumps(["The stored file is no longer available."])
+            db.commit()
+            return
+
+        try:
+            rows, errors = await parse_upload(upload.file_name or "", "", content)
+        except Exception as exc:  # noqa: BLE001 - a parser crash must not strand the row in "processing"
+            upload.status = "failed"
+            upload.validation_errors = json.dumps([f"Processing failed: {exc}"])
+            db.commit()
+            return
+
+        # Re-processing is idempotent: clear the previous run's invoices only
+        # once the new parse has succeeded, so a failure leaves the old data.
+        db.query(Invoice).filter(Invoice.upload_id == upload.id).delete()
+        parsed = ingest_invoices(db, upload, _invoice_source(upload.file_type), rows)
+
+        upload.parsed_rows = parsed
+        upload.validation_errors = json.dumps(errors)
+        if parsed:
+            upload.status = "parsed" if not errors else "parsed_with_warnings"
+        else:
+            upload.status = "failed" if errors else "processed"
+        db.commit()
+    finally:
+        db.close()
+
+
+@router.post("/process/{upload_id}", status_code=202)
+def process_upload(
+    upload_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(roles.TAX_REVIEWER, roles.ADMIN)),
+) -> dict:
+    """Queue a document for parsing and return immediately.
+
+    Extraction can take minutes per page, which is far too long to hold a
+    request open. The row is marked "processing" and the work is handed to a
+    background task; clients poll GET /api/ingestion/uploads for the result.
+    """
+    upload = db.get(Upload, upload_id)
+    if not upload:
+        raise HTTPException(status_code=404, detail="Upload not found.")
+    ensure_client_scope(db, user, upload.client_id)
+
+    if upload.status == STATUS_PROCESSING:
+        raise HTTPException(status_code=409, detail="This document is already being processed.")
+
+    upload.status = STATUS_PROCESSING
+    upload.validation_errors = json.dumps([])
+    db.commit()
+    db.refresh(upload)
+
+    background_tasks.add_task(run_processing, upload.id)
+    return {"upload": serialize_upload(db, upload), "queued": True}
+
+
+@router.patch("/uploads/{upload_id}/visibility")
+def set_visibility(
+    upload_id: int,
+    payload: VisibilityRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(roles.TAX_REVIEWER, roles.ADMIN)),
+) -> dict:
+    upload = db.get(Upload, upload_id)
+    if not upload:
+        raise HTTPException(status_code=404, detail="Upload not found.")
+    ensure_client_scope(db, user, upload.client_id)
+    upload.visible_to_client = payload.visible
+    db.commit()
+    db.refresh(upload)
+    return {"upload": serialize_upload(db, upload)}
+
+
+@router.get("/uploads")
+def list_uploads(db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict:
+    client_ids = scoped_client_ids(db, user)
+    if not client_ids:
+        return {"uploads": []}
+
+    query = db.query(Upload).filter(Upload.client_id.in_(client_ids))
+    # Clients only see documents the CA has shared with them.
+    if roles.normalize(user.role) == roles.BUSINESS_USER:
+        query = query.filter(Upload.visible_to_client.is_(True))
+
+    uploads = query.order_by(Upload.created_at.desc()).all()
+    return {"uploads": [serialize_upload(db, upload) for upload in uploads]}
+
+
+def serialize_upload(db: Session, upload: Upload) -> dict:
+    client = db.get(Client, upload.client_id)
+    uploader = db.get(User, upload.uploaded_by)
+    return {
+        "id": upload.id,
+        "clientId": upload.client_id,
+        "clientName": client.name if client else "",
+        "uploadedBy": upload.uploaded_by,
+        "uploadedByName": uploader.name if uploader else "",
+        "uploadedByRole": uploader.role if uploader else "",
+        "fileName": upload.file_name,
+        "fileType": upload.file_type,
+        "status": upload.status,
+        "parsedRows": upload.parsed_rows,
+        "validationErrors": json.loads(upload.validation_errors or "[]"),
+        "gstin": upload.gstin,
+        "financialYear": upload.financial_year,
+        "taxPeriod": upload.tax_period,
+        "documentType": upload.document_type,
+        "sourceType": upload.source_type,
+        "checksum": upload.checksum,
+        "visibleToClient": upload.visible_to_client,
+        "objectKey": upload.object_key,
+        "createdAt": upload.created_at,
+    }

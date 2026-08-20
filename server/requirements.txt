@@ -1,0 +1,18 @@
+fastapi==0.115.6
+uvicorn==0.34.0
+sqlalchemy==2.0.36
+alembic==1.14.0
+python-jose[cryptography]==3.3.0
+passlib==1.7.4
+python-multipart==0.0.20
+redis==5.2.1
+boto3==1.35.90
+httpx==0.28.1
+pydantic-settings==2.7.1
+email-validator==2.2.0
+rapidfuzz==3.14.5
+pypdf==5.1.0
+pymupdf==1.28.2
+pillow>=10.0.0            # extract.py works on PIL images
+# OCR is done via a local vision-language model (Ollama, e.g. qwen2.5vl:3b);
+# PaddleOCR is no longer required.

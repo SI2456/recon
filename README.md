@@ -1,9 +1,18 @@
-# ReconAI — Automated GST Reconciliation & Fraud Detection
+# ReconAI — GST Reconciliation & Compliance-Risk Analysis
 
-AI-powered GST tax-compliance platform for Government Tax Authorities & Tax Officers. ReconAI
-automates the reconciliation of a client's books (Tally) against their GST
-returns (GSTR-2A/2B), detects fraud with machine learning, and surfaces
-circular-trading rings — turning a manual, days-long process into minutes.
+ReconAI is a GST reconciliation and compliance-risk analysis platform that
+consolidates business accounting records, user-provided GST statements and
+invoice documents. It reconciles transactions, validates GST-related fields and
+ITC conditions against configurable rules, identifies anomalous transaction and
+supplier patterns using ML and graph analytics, and provides an evidence-based
+review workflow for finance and tax professionals.
+
+**Scope.** ReconAI analyses the GST and accounting evidence a business already
+has. It does not connect to, reproduce or simulate government systems: GST data
+enters the platform as a file the authorized user exported from the GST portal,
+or as clearly-labelled test data. Every upload records its `source_type`
+(`USER_UPLOAD`, `GST_EXPORT`, `ACCOUNTING_EXPORT`, `OCR_DOCUMENT`,
+`SIMULATED_GST`) so the origin of any figure can be stated rather than assumed.
 
 > **Group 13** · Information Technology Department · Birla Vishvakarma
 > Mahavidyalaya Engineering College · AY 2026-27, Semester 7
@@ -22,8 +31,8 @@ circular-trading rings — turning a manual, days-long process into minutes.
 | **Fraud detection** | **Isolation Forest** (unsupervised anomaly) + **Logistic Regression** (supervised) risk scoring, explained with **SHAP** values |
 | **Graph analytics** | Directed supplier→buyer network with **DFS circular-trading (ITC fraud ring) detection** and ITC-at-risk tallies |
 | **GSTIN verification** | Live GST-portal validation (captcha-free), plus full taxpayer details (legal name, address) via a captcha flow |
-| **Document workflow** | Clients upload → Tax Officer reviews & **Processes** (runs OCR/extraction) → Tax Officer controls per-document **visibility** to the client |
-| **RBAC** | Admin / Tax Officer / Client roles with scoped data access and email-OTP verification |
+| **Document workflow** | Business user uploads → Reviewer **Processes** (runs OCR/extraction) → Reviewer controls per-document **visibility** back to the business user |
+| **RBAC** | Admin / Tax & Compliance Reviewer / Business-Finance User roles with scoped data access and email-OTP verification |
 
 Planned / in progress: RAG assistant with a ChromaDB vector store (an
 Ollama-backed assistant endpoint exists today), and richer PDF/Excel report
@@ -66,8 +75,8 @@ npm run dev          # Vite dev server on http://localhost:5173
 
 ```bash
 cd server
-python -m venv .venv
-.venv\Scripts\activate            # Windows (use source .venv/bin/activate on macOS/Linux)
+python -m venv venv               # the npm scripts expect server/venv
+venv\Scripts\activate             # Windows (use source venv/bin/activate on macOS/Linux)
 pip install -r requirements.txt
 pip install -r requirements-ml.txt        # scikit-learn, shap, rapidfuzz, etc.
 pip install -r requirements-postgres.txt  # PostgreSQL driver
@@ -96,17 +105,19 @@ model with `OLLAMA_VISION_MODEL` in `server/.env` if desired.
 | Role | Email | Password |
 | --- | --- | --- |
 | Admin | `admin.demo@reconai.local` | `Demo@123` |
-| Tax Officer | `ca.demo@reconai.local` | `Demo@123` |
-| Client | `client.demo@reconai.local` | `Demo@123` |
+| Tax & Compliance Reviewer | `ca.demo@reconai.local` | `Demo@123` |
+| Business / Finance User | `client.demo@reconai.local` | `Demo@123` |
 
 ## How the document flow works
 
-1. A **client** uploads a document (CSV / JSON / PDF / image) — it is stored,
-   not yet processed.
-2. The **CA** sees it in the Upload Center and clicks **Process** — this runs
-   OCR/parsing, extracts invoice rows, and feeds reconciliation & fraud
-   detection.
-3. The CA runs **reconciliation** (exact + fuzzy) and **fraud detection**, and
-   reviews the **graph** for circular-trading rings.
-4. The CA toggles **Visible to client** on any document to share it back; the
-   client only sees documents the CA has shared.
+1. A **business / finance user** uploads a document (CSV / JSON / PDF / image)
+   with its GSTIN, financial year and tax period — it is stored, not yet
+   processed.
+2. The **tax & compliance reviewer** sees it in the Upload Center and clicks
+   **Process** — this runs OCR/parsing, extracts invoice rows into the
+   canonical model, and feeds reconciliation and the risk checks.
+3. The reviewer runs **reconciliation** (exact + fuzzy), works through the
+   **exceptions** raised by the rule, ML and graph layers, and inspects the
+   evidence behind each one.
+4. The reviewer toggles **visibility** on any document to share it back; the
+   business user only sees documents the reviewer has shared.

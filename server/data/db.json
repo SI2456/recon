@@ -1,0 +1,96 @@
+{
+  "users": [
+    {
+      "id": "usr_admin_demo",
+      "name": "System Admin",
+      "email": "admin.demo@reconai.local",
+      "password": "Demo@123",
+      "role": "admin",
+      "status": "active",
+      "createdAt": "2026-07-13T00:00:00.000Z"
+    },
+    {
+      "id": "usr_ca_demo",
+      "name": "Demo Chartered Accountant",
+      "email": "ca.demo@reconai.local",
+      "password": "Demo@123",
+      "role": "ca",
+      "firmName": "ReconAI Audit LLP",
+      "icaiNumber": "CA123456",
+      "status": "active",
+      "createdAt": "2026-07-13T00:00:00.000Z"
+    },
+    {
+      "id": "usr_client_demo",
+      "name": "Demo Client",
+      "email": "client.demo@reconai.local",
+      "password": "Demo@123",
+      "role": "client",
+      "firmName": "ReconAI Audit LLP",
+      "gstin": "27AAACA1234F1Z5",
+      "caId": "usr_ca_demo",
+      "status": "active",
+      "createdAt": "2026-07-13T00:00:00.000Z"
+    }
+  ],
+  "clients": [
+    {
+      "id": "cl_demo",
+      "name": "Demo Client",
+      "gstin": "27AAACA1234F1Z5",
+      "email": "client.demo@reconai.local",
+      "caId": "usr_ca_demo",
+      "city": "Mumbai",
+      "status": "Active",
+      "risk": "Low",
+      "compliance": 92,
+      "createdAt": "2026-07-13T00:00:00.000Z"
+    }
+  ],
+  "invoices": [
+    {
+      "id": "INV-2026-001",
+      "clientId": "cl_demo",
+      "supplier": "Apex Steel Traders",
+      "gstin": "27BBBCD4321P1Z8",
+      "date": "2026-07-01",
+      "taxable": 42000,
+      "gst": 7560,
+      "total": 49560,
+      "status": "Matched",
+      "risk": "Low",
+      "source": "books"
+    },
+    {
+      "id": "INV-2026-002",
+      "clientId": "cl_demo",
+      "supplier": "Northstar Logistics",
+      "gstin": "27CCCDD9876K1Z1",
+      "date": "2026-07-03",
+      "taxable": 76000,
+      "gst": 13680,
+      "total": 89680,
+      "status": "Mismatched",
+      "risk": "Medium",
+      "source": "books"
+    }
+  ],
+  "uploads": [],
+  "fraudAlerts": [
+    {
+      "id": "ALT-001",
+      "clientId": "cl_demo",
+      "type": "Invoice Mismatch",
+      "entity": "Northstar Logistics",
+      "risk": 67,
+      "amount": 89680,
+      "reason": "Books invoice not found in GST portal snapshot.",
+      "shap": ["invoice_number_distance", "supplier_gstin_seen", "amount_delta"],
+      "status": "Open",
+      "createdAt": "2026-07-13T00:00:00.000Z"
+    }
+  ],
+  "reports": [],
+  "messages": [],
+  "auditLogs": []
+}

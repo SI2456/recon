@@ -1,0 +1,24 @@
+# Every env file anywhere (incl. server/.env and *.bak copies), except the
+# committed template.
+.env
+.env.*
+!.env.example
+*.pyc
+__pycache__/
+.venv/
+venv/
+node_modules/
+dist/
+*.zip
+server.zip
+
+# Any virtualenv, however it is named (venv, venv.broken-py310, venv311...).
+venv*/
+
+# OCR debug dump, rewritten on every extraction run.
+raw_response.txt
+
+# Runtime state, not source: uploaded documents and the working databases.
+# The uploads are real third-party invoices and must not be published.
+server/data/uploads/
+server/data/*.sqlite3
