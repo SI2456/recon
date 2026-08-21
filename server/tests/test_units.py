@@ -104,3 +104,35 @@ class TestTotalsChecks:
     def test_tax_above_the_taxable_value_is_flagged(self):
         codes = {finding.code for finding in integrity.check_totals(100, 500, 600)}
         assert "TAX_EXCEEDS_TAXABLE" in codes
+
+
+class TestExtractPipelineGstin:
+    """extract.py is imported by services/vision_ocr, so its verdict is shown
+    to reviewers alongside the rule engine's. The two have to agree."""
+
+    def test_it_agrees_with_the_rule_engine_on_a_valid_gstin(self):
+        import extract
+
+        gstin = make_gstin()
+        assert extract.analyze_gstin(gstin)["valid"] is True
+        assert integrity.check_gstin(gstin) == []
+
+    def test_a_fabricated_gstin_is_rejected_by_both(self):
+        """The regex alone used to pass it, so the OCR panel called a
+        fabricated supplier valid while the rule engine flagged it."""
+        import extract
+
+        gstin = make_gstin()
+        fabricated = gstin[:14] + ("B" if gstin[14] != "B" else "C")
+
+        result = extract.analyze_gstin(fabricated)
+        assert result["valid"] is False
+        assert result["well_formed"] is True  # shape is fine; the checksum is not
+        assert "GSTIN_CHECKSUM" in {finding.code for finding in integrity.check_gstin(fabricated)}
+
+    def test_every_state_code_the_rule_engine_accepts_has_a_name(self):
+        """A gap here reported a real invoice's state as "Unknown State"."""
+        import extract
+
+        for code in sorted(integrity._VALID_STATE_CODES):
+            assert code in extract.STATE_CODES, code

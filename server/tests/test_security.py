@@ -90,3 +90,45 @@ class TestTenantScoping:
         response = client.get("/api/clients", headers=newcomer["headers"])
         assert response.status_code == 200
         assert response.json()["clients"] == []
+
+
+class TestAccountEnumeration:
+    """Unauthenticated endpoints must not confirm which addresses are registered.
+
+    These take an arbitrary email from anyone. Answering "Account not found."
+    for an unknown one made them a membership oracle: the addresses that come
+    back 200 are registered users of a GST compliance platform, which both
+    identifies a firm's clients and gives a phishing attempt its target list.
+    """
+
+    def test_forgot_password_answers_the_same_either_way(self, client, make_user):
+        known = make_user("business_user")
+
+        found = client.post("/api/auth/forgot-password", json={"email": known["email"]})
+        missing = client.post("/api/auth/forgot-password", json={"email": "nobody-here@test.local"})
+
+        assert found.status_code == missing.status_code == 200
+        assert found.json()["message"] == missing.json()["message"]
+        # The OTP itself is still only issued for a real account.
+        assert "devOtp" in found.json()
+        assert "devOtp" not in missing.json()
+
+    def test_resend_otp_answers_the_same_either_way(self, client, make_user):
+        known = make_user("business_user")
+
+        found = client.post(
+            "/api/auth/resend-otp", json={"email": known["email"], "purpose": "registration"}
+        )
+        missing = client.post(
+            "/api/auth/resend-otp", json={"email": "nobody-here@test.local", "purpose": "registration"}
+        )
+
+        assert found.status_code == missing.status_code == 200
+        assert found.json()["message"] == missing.json()["message"]
+
+    def test_a_bad_purpose_is_still_rejected(self, client, make_user):
+        user = make_user("business_user")
+        response = client.post(
+            "/api/auth/resend-otp", json={"email": user["email"], "purpose": "nonsense"}
+        )
+        assert response.status_code == 400

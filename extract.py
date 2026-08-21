@@ -198,11 +198,33 @@ STATE_CODES = {
     "10": "Bihar", "11": "Sikkim", "12": "Arunachal Pradesh", "13": "Nagaland", "14": "Manipur",
     "15": "Mizoram", "16": "Tripura", "17": "Meghalaya", "18": "Assam", "19": "West Bengal",
     "20": "Jharkhand", "21": "Odisha", "22": "Chhattisgarh", "23": "Madhya Pradesh", "24": "Gujarat",
+    # 25 was Daman & Diu before it merged into 26 in 2020. Invoices predating
+    # the merger still carry it, and leaving it out reported them as an
+    # unknown state.
+    "25": "Daman & Diu (pre-2020)",
     "26": "Dadra & Nagar Haveli and Daman & Diu", "27": "Maharashtra", "28": "Andhra Pradesh",
     "29": "Karnataka", "30": "Goa", "31": "Lakshadweep", "32": "Kerala", "33": "Tamil Nadu",
     "34": "Puducherry", "35": "Andaman & Nicobar Islands", "36": "Telangana", "37": "Andhra Pradesh (New)",
-    "38": "Ladakh"
+    "38": "Ladakh", "97": "Other Territory", "99": "Centre Jurisdiction"
 }
+
+# GSTIN check-digit alphabet: values 0-35 in order.
+_GSTIN_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+
+def gstin_check_digit(first_fourteen):
+    """The 15th character required by the GSTIN mod-36 checksum.
+
+    Mirrors server/app/services/integrity.gstin_check_digit. Kept as a local
+    copy rather than an import because this module also runs standalone from
+    the command line, with no server package on the path.
+    """
+    factor, total, mod = 2, 0, len(_GSTIN_ALPHABET)
+    for char in reversed(first_fourteen):
+        product = factor * _GSTIN_ALPHABET.index(char)
+        factor = 1 if factor == 2 else 2
+        total += (product // mod) + (product % mod)
+    return _GSTIN_ALPHABET[(mod - (total % mod)) % mod]
 
 def analyze_gstin(gstin):
     if is_empty(gstin):
@@ -212,20 +234,39 @@ def analyze_gstin(gstin):
     match = re.search(gst_pattern, raw_str)
     if match:
         g = match.group(1)
-        is_valid = True
+        well_formed = True
     else:
         g = re.sub(r'[^A-Z0-9]', '', raw_str)
         gst_regex = r'^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$'
-        is_valid = bool(re.match(gst_regex, g))
-        
+        well_formed = bool(re.match(gst_regex, g))
+
+    # The shape alone proves nothing — an invented GSTIN can be written to
+    # match it. The mod-36 check digit is what makes a real GSTIN
+    # self-validating, and it fails an invented one 35 times out of 36. Without
+    # it this panel called a fabricated supplier valid while the rule engine
+    # (services/integrity.check_gstin) flagged the same number as fabricated,
+    # so a reviewer saw the two disagree on the same document.
+    checksum_ok = well_formed and g[14] == gstin_check_digit(g[:14])
+    is_valid = well_formed and checksum_ok
+
     state_code = g[:2] if len(g) >= 2 else "N/A"
     state_name = STATE_CODES.get(state_code, "Unknown State") if state_code != "N/A" else "N/A"
     pan = g[2:12] if len(g) >= 12 else "N/A"
-    
+
+    if not well_formed:
+        reason = "Malformed"
+    elif not checksum_ok:
+        reason = "Check digit does not match — the number is almost certainly fabricated"
+    else:
+        reason = "Valid"
+
     return {
         "raw": gstin,
         "gstin": g if is_valid else "N/A",
         "valid": is_valid,
+        "well_formed": well_formed,
+        "checksum_ok": checksum_ok,
+        "reason": reason,
         "state_code": state_code,
         "state_name": state_name,
         "pan": pan,
@@ -355,19 +396,19 @@ def load_gst_excel_db(file_path):
 def init_gst_databases():
     global _HSN_DB, _SAC_DB
     base_dir = Path(__file__).resolve().parent
+    # Next to this file first, then the working directory. The third fallback
+    # used to be a hardcoded "S:\OCR paddle\" path from one developer's
+    # machine, which exists nowhere else and only delayed the "not found"
+    # message by one lookup.
     if _HSN_DB is None:
         hsn_path = base_dir / "HSN.xlsx"
         if not hsn_path.exists():
             hsn_path = Path("HSN.xlsx")
-        if not hsn_path.exists():
-            hsn_path = Path(r"S:\OCR paddle\HSN.xlsx")
         _HSN_DB = load_gst_excel_db(str(hsn_path))
     if _SAC_DB is None:
         sac_path = base_dir / "SAC.xlsx"
         if not sac_path.exists():
             sac_path = Path("SAC.xlsx")
-        if not sac_path.exists():
-            sac_path = Path(r"S:\OCR paddle\SAC.xlsx")
         _SAC_DB = load_gst_excel_db(str(sac_path))
 
 # ---------------------------------------------------------------------------

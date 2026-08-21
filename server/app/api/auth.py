@@ -168,11 +168,13 @@ def resend_otp(payload: ResendOtpRequest, db: Session = Depends(get_db)) -> dict
     if payload.purpose not in {"registration", "password_reset"}:
         raise HTTPException(status_code=400, detail="Invalid OTP purpose.")
     user = db.query(User).filter(User.email == payload.email.strip().lower()).first()
+    # Same reasoning as /forgot-password: this is unauthenticated and takes an
+    # arbitrary address, so it must not report whether one is registered.
+    response = {"message": "If that email is registered, an OTP has been sent."}
     if not user:
-        raise HTTPException(status_code=404, detail="Account not found.")
+        return response
     otp = create_email_otp(db, user, payload.purpose, resend=True)
     db.commit()
-    response = {"message": "OTP sent again."}
     if otp:
         response["devOtp"] = otp
     return response
@@ -180,14 +182,28 @@ def resend_otp(payload: ResendOtpRequest, db: Session = Depends(get_db)) -> dict
 
 @router.post("/forgot-password")
 def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db)) -> dict:
-    user = db.query(User).filter(User.email == payload.email.strip().lower()).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="Account not found.")
-    if not user.email_verified:
-        raise HTTPException(status_code=403, detail="Email is not verified yet.")
+    """Send a password-reset OTP, without confirming whether the account exists.
+
+    This endpoint takes an email address from anyone, unauthenticated. Answering
+    "Account not found." for an unknown address turned it into a membership
+    oracle: submit a list of addresses, and the ones that come back 200 are
+    registered users of a GST compliance platform — which is worth knowing
+    before a phishing attempt, and identifies the firm's clients besides.
+
+    So the reply is the same either way. A real account gets its OTP; an
+    unknown one silently gets nothing, and the caller cannot tell the two
+    apart.
+    """
+    email = payload.email.strip().lower()
+    user = db.query(User).filter(User.email == email).first()
+    response = {"message": "If that email is registered, a password reset OTP has been sent.", "email": email}
+
+    # An unverified account is not told it exists either, for the same reason.
+    if not user or not user.email_verified:
+        return response
+
     otp = create_email_otp(db, user, "password_reset")
     db.commit()
-    response = {"message": "Password reset OTP sent.", "email": user.email}
     if otp:
         response["devOtp"] = otp
     return response
