@@ -127,13 +127,14 @@ export default function AuthPages({ initialRole, initialMode, onBackToLanding, o
     setMode("signin");
   };
 
-  const handleResendOtp = async () => {
-    // OTPs are scoped to a purpose, so resending from the reset screen has to
-    // ask for a password_reset code — a registration code would never verify.
+  // OTPs are scoped to a purpose, so resending from the reset screen has to ask
+  // for a password_reset code — a registration code would never verify. The
+  // caller may name the purpose; otherwise it is derived from the screen.
+  const handleResendOtp = async (purpose?: "registration" | "password_reset") => {
     const result = await apiRequest<{ message: string; devOtp?: string }>("/api/auth/resend-otp", {
       method: "POST",
       auth: false,
-      body: JSON.stringify({ email, purpose: mode === "reset" ? "password_reset" : "registration" }),
+      body: JSON.stringify({ email, purpose: purpose ?? (mode === "reset" ? "password_reset" : "registration") }),
     });
     setNotice(result.devOtp ? `${result.message} Real-Time OTP: ${result.devOtp}` : result.message);
     if (result.devOtp) setOtp(result.devOtp);
@@ -289,7 +290,18 @@ export default function AuthPages({ initialRole, initialMode, onBackToLanding, o
               )}
 
               {(mode === "verify" || mode === "reset") && (
-                <button type="button" onClick={() => handleResendOtp(mode === "verify" ? "registration" : "password_reset")} className="text-xs text-amber-500 hover:underline">
+                <button
+                  type="button"
+                  // Outside the form's submit handler, so a failure here has to
+                  // be caught and shown or the click looks like it did nothing.
+                  onClick={() => {
+                    setError("");
+                    handleResendOtp(mode === "verify" ? "registration" : "password_reset").catch(err =>
+                      setError(err instanceof Error ? err.message : "Could not resend the OTP."),
+                    );
+                  }}
+                  className="text-xs text-amber-500 hover:underline"
+                >
                   Resend OTP
                 </button>
               )}

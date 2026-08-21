@@ -1,5 +1,5 @@
 import { BUSINESS_USER, normalizeRole, type Role } from "../lib/roles";
-import { useState, useRef, useEffect } from "react";
+import { Fragment, useState, useRef, useEffect } from "react";
 import { 
   Building2, ShieldAlert, Upload, FileText, CheckCircle2, AlertTriangle, 
   ArrowUpRight, ArrowDownRight, Send, User, Bot, Download, RefreshCw, 
@@ -40,6 +40,9 @@ export default function ClientDashboard({ user, dark, setDark, onLogout }: Clien
   const [captchaSession, setCaptchaSession] = useState("");
   const [captchaText, setCaptchaText] = useState("");
   const [captchaLoading, setCaptchaLoading] = useState(false);
+
+  // Which reconciliation row is opened out to show its detail panel.
+  const [expandedInvoice, setExpandedInvoice] = useState<string | null>(null);
 
   const [showCaChangeModal, setShowCaChangeModal] = useState(false);
   const [myCaRequests, setMyCaRequests] = useState<any[]>([]);
@@ -294,6 +297,20 @@ export default function ClientDashboard({ user, dark, setDark, onLogout }: Clien
     } finally {
       setCaptchaLoading(false);
     }
+  };
+
+  // Entry point for the "Verify GSTIN" button. The GSTIN is checked here
+  // before a captcha is fetched: the portal round-trip is slow, and asking the
+  // user to solve a captcha only to be told the number was malformed wastes it.
+  const startGstinVerify = async () => {
+    const candidate = gstVerifyValue.replace(/[^A-Z0-9]/gi, "").toUpperCase();
+    if (candidate.length !== 15) {
+      setClientNotice("Enter the full 15-character GSTIN before verifying.");
+      return;
+    }
+    setGstVerifyValue(candidate);
+    setClientNotice("");
+    await loadCaptcha();
   };
 
   const cancelGstinVerify = () => {
@@ -738,9 +755,10 @@ export default function ClientDashboard({ user, dark, setDark, onLogout }: Clien
                       {myInvoices.map((inv) => {
                         const isExpanded = expandedInvoice === inv.id;
                         return (
-                          <>
-                            <tr 
-                              key={inv.id} 
+                          // The key belongs on the fragment: the row and its
+                          // detail row are two siblings of one list entry.
+                          <Fragment key={inv.id}>
+                            <tr
                               onClick={() => setExpandedInvoice(isExpanded ? null : inv.id)}
                               className={`hover:bg-muted/30 cursor-pointer ${isExpanded ? "bg-muted/20" : ""}`}
                             >
@@ -773,7 +791,7 @@ export default function ClientDashboard({ user, dark, setDark, onLogout }: Clien
                               </td>
                             </tr>
                             {isExpanded && (
-                              <tr key={`${inv.id}-detail`} className="bg-muted/10">
+                              <tr className="bg-muted/10">
                                 <td colSpan={7} className="px-6 py-4 border-t border-b border-border">
                                   <div className="grid grid-cols-2 gap-8">
                                     <div>
@@ -814,7 +832,7 @@ export default function ClientDashboard({ user, dark, setDark, onLogout }: Clien
                                 </td>
                               </tr>
                             )}
-                          </>
+                          </Fragment>
                         );
                       })}
                       {myInvoices.length === 0 && (

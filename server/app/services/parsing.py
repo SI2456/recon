@@ -95,6 +95,9 @@ _COLUMN_SYNONYMS: dict[str, tuple[str, ...]] = {
     "place_of_supply": ("place_of_supply", "placeofsupply", "pos", "posstate", "supplystate", "statecode"),
     "po_number": ("po_number", "ponumber", "pono", "po", "purchaseorder", "purchaseorderno",
                   "purchaseordernumber", "orderno", "ordernumber", "ponum"),
+    # An order's own date. Kept separate from invoice_date so a purchase-order
+    # export headed "PO Date" resolves, while an invoice file is unaffected.
+    "po_date": ("po_date", "podate", "orderdate", "purchaseorderdate", "dateoforder"),
     "quantity": ("quantity", "qty", "units", "nos", "count"),
     "rate": ("rate", "unitrate", "unitprice", "price", "rateperunit"),
     "description": ("description", "item", "itemdescription", "particulars", "product", "goods"),
@@ -312,7 +315,9 @@ def parse_purchase_order_csv(content: bytes) -> tuple[list[ParsedPurchaseOrder],
             po_number=str(get("po_number") or "").strip()[:80],
             supplier=str(get("supplier") or "").strip(),
             supplier_gstin=_clean_gstin(get("supplier_gstin")),
-            po_date=_normalize_date(get("invoice_date")),
+            # The order's own date when the file gives one, else whatever
+            # generic date column it carries.
+            po_date=_normalize_date(get("po_date") or get("invoice_date")),
             total=total,
             taxable=taxable,
             hsn=_clean_hsn(get("hsn")),
@@ -678,6 +683,14 @@ def _row_from_vlm(data: dict) -> ParsedInvoice:
     if taxable == 0 and total and gst:
         taxable = round(total - gst, 2)
 
+    # Read out before the constructor: written inline, the conditional bound
+    # more loosely than the `or` chain, so when order_info *was* a dict but
+    # carried no po_number the expression yielded None and str() turned it into
+    # the literal text "None" — an invoice citing a purchase order called
+    # "None", which then raised a PO_NOT_FOUND finding against a clean invoice.
+    order_info = data.get("order_info") if isinstance(data.get("order_info"), dict) else {}
+    po_number = str(order_info.get("po_number") or data.get("po_number") or "").strip()[:80]
+
     return ParsedInvoice(
         invoice_no=str(data.get("invoice_number") or data.get("invoice_no") or "").strip(),
         supplier=str(supplier.get("name") or data.get("supplier_name") or "").strip(),
@@ -695,11 +708,7 @@ def _row_from_vlm(data: dict) -> ParsedInvoice:
             buyer.get("gstin") or data.get("recipient_gstin") or data.get("buyer_gstin") or ""
         ),
         place_of_supply=_clean_pos(data.get("place_of_supply")),
-        po_number=str(
-            (data.get("order_info") or {}).get("po_number")
-            if isinstance(data.get("order_info"), dict) else ""
-            or data.get("po_number") or ""
-        ).strip()[:80],
+        po_number=po_number,
     )
 
 

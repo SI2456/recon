@@ -1,5 +1,6 @@
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
+from sqlalchemy import false, or_
 from sqlalchemy.orm import Session
 
 from app.core import roles as roles_module
@@ -39,13 +40,32 @@ def require_roles(*roles: str):
     return dependency
 
 
+def owned_client_filter(user: User):
+    """SQL condition matching the workspaces a business user owns.
+
+    Only non-empty keys are compared. A user whose GSTIN has not been verified
+    yet holds ``""``, and ``Client.gstin == ""`` would match every other
+    workspace in the same state — handing one business another's invoices.
+    ``false()`` when the account has neither key, which matches nothing rather
+    than everything.
+    """
+    conditions = []
+    if (user.email or "").strip():
+        conditions.append(Client.email == user.email)
+    if (user.gstin or "").strip():
+        conditions.append(Client.gstin == user.gstin)
+    if not conditions:
+        return false()
+    return or_(*conditions)
+
+
 def scoped_client_ids(db: Session, user: User) -> list[int]:
     role = roles_module.normalize(user.role)
     if role == roles_module.ADMIN:
         return [item.id for item in db.query(Client.id).all()]
     if role == roles_module.TAX_REVIEWER:
         return [item.id for item in db.query(Client.id).filter(Client.ca_id == user.id).all()]
-    return [item.id for item in db.query(Client.id).filter((Client.email == user.email) | (Client.gstin == user.gstin)).all()]
+    return [item.id for item in db.query(Client.id).filter(owned_client_filter(user)).all()]
 
 
 def ensure_client_scope(db: Session, user: User, client_id: int) -> None:

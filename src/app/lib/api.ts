@@ -2,8 +2,6 @@ import type { Role } from "./roles";
 
 // Exported so callers that build URLs the browser fetches directly (iframe
 // sources, download links) resolve against the same origin as apiRequest.
-import type { Role } from "./roles";
-
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:4000";
 
 type ApiOptions = RequestInit & {

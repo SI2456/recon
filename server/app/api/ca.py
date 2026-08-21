@@ -1,12 +1,16 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.api.deps import get_current_user
 from app.core import roles
 from app.db.models import CAProfile, Client, User
 from app.db.session import get_db
 
 
-router = APIRouter()
+# The reviewer directory is a signed-in feature: a business user browses it to
+# pick or change who reviews their books. Left open it published every
+# reviewer's name, email address and firm to anyone who asked.
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 def serialize_ca(db: Session, user: User, profile: CAProfile | None) -> dict:

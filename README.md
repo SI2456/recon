@@ -69,22 +69,27 @@ export.
 ```bash
 npm install
 npm run dev          # Vite dev server on http://localhost:5173
+npm run typecheck    # TypeScript check (the Vite build does not type-check)
 ```
+
+`npm test` runs the backend suite (`server/tests/`). CI runs the typecheck, the
+build and that suite on every pull request — see `.github/workflows/ci.yml`.
 
 ### 2. Backend
 
 ```bash
-cd server
-python -m venv venv               # the npm scripts expect server/venv
-venv\Scripts\activate             # Windows (use source venv/bin/activate on macOS/Linux)
-pip install -r requirements.txt
-pip install -r requirements-ml.txt        # scikit-learn, shap, rapidfuzz, etc.
-pip install -r requirements-postgres.txt  # PostgreSQL driver
-cd ..
-npm run db:up          # starts PostgreSQL + Redis via Docker (optional)
-npm run backend:seed   # seed demo users & data
-npm run backend        # FastAPI on http://localhost:4000
+python -m venv server/venv        # the npm scripts expect server/venv
+npm run backend:install           # core dependencies
+npm run backend:install-ml        # optional: scikit-learn, shap (fraud scoring)
+npm run backend:install-postgres  # PostgreSQL driver
+npm run db:up                     # starts PostgreSQL + Redis via Docker (optional)
+npm run backend:seed              # seed demo users & data
+npm run backend                   # FastAPI on http://localhost:4000
 ```
+
+These scripts run the same on Windows, macOS and Linux — `server/scripts/py.js`
+resolves the virtualenv's interpreter for the platform it is on. `npm run
+dev:full` starts the API and the Vite dev server together.
 
 See [`server/README.md`](server/README.md) for full database, `.env`, and endpoint details.
 

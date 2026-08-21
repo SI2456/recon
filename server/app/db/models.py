@@ -108,6 +108,27 @@ class EmailOtp(Base):
     user = relationship("User")
 
 
+class CAChangeRequest(Base):
+    """A business user's request to be moved to a different reviewer.
+
+    The move is not made when the request is filed. Reassigning a workspace
+    hands a new reviewer every invoice and every exception in it, so an admin
+    approves it and the approval is what actually changes ``Client.ca_id``.
+    """
+
+    __tablename__ = "ca_change_requests"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.id"), index=True)
+    client_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    current_ca_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=True)
+    requested_ca_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    reason: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(20), default="Pending", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+
+
 class Upload(Base):
     __tablename__ = "uploads"
 

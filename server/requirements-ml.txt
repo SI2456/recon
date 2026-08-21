@@ -1,7 +1,11 @@
-# Pins updated for Python 3.14 wheel availability.
+# Fraud scoring: Isolation Forest + Logistic Regression, explained with SHAP.
+# app/services/ml.py imports these lazily and degrades to a rule-based
+# fallback when they are absent, so this file is optional.
 pandas>=2.2.3
 numpy>=2.1.0
 scikit-learn>=1.7.0
 shap>=0.48.0
-paddlepaddle>=2.6.0
-paddleocr>=2.7.0
+
+# PaddleOCR/PaddlePaddle were removed with the move to vision-LLM OCR (Ollama,
+# qwen2.5vl) in app/services/vision_ocr.py. Nothing imports them any more, and
+# they are a ~700 MB install, so they are no longer pulled in.
