@@ -6,6 +6,7 @@
   "scripts": {
     "backend": "node server/scripts/py.js -m uvicorn app.main:app --app-dir server --host 0.0.0.0 --port 4000 --reload",
     "backend:install": "node server/scripts/py.js -m pip install -r server/requirements.txt",
+    "backend:install-dev": "node server/scripts/py.js -m pip install -r server/requirements-dev.txt",
     "backend:install-ml": "node server/scripts/py.js -m pip install -r server/requirements-ml.txt",
     "backend:install-postgres": "node server/scripts/py.js -m pip install -r server/requirements-postgres.txt",
     "backend:seed": "node server/scripts/py.js server/scripts/seed.py",
@@ -17,6 +18,7 @@
     "db:up": "docker compose -f server/docker-compose.yml up -d",
     "dev": "vite",
     "dev:full": "node server/dev-full.js",
+    "test": "node server/scripts/py.js -m pytest server -q",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

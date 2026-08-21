@@ -44,6 +44,19 @@ npm run db:migrate
 npm run backend:seed
 ```
 
+## Tests
+
+```bash
+npm run backend:install-dev   # pytest
+npm test                      # or: python -m pytest server -q
+```
+
+`server/tests/` runs the real FastAPI app against a throwaway SQLite database
+and a throwaway upload directory, both created in a temp dir by
+`tests/conftest.py` — so the suite needs no database service, reads nothing
+from `server/.env`, and leaves the working tree untouched. CI runs it on
+Python 3.11 and 3.12.
+
 Email OTP uses SMTP settings from `server/.env`. In development, if `EMAIL_HOST` is empty, the OTP is printed in the backend terminal and returned as `devOtp` for testing.
 
 GSTIN verification uses GSTVerify from the backend only. Add your key to `server/.env`:

@@ -1,0 +1,5 @@
+# Test-only dependencies. The suite in server/tests/ runs the real FastAPI app
+# against a throwaway SQLite database, so it needs nothing beyond a runner and
+# the HTTP client TestClient is built on.
+pytest==9.1.1
+httpx==0.28.1

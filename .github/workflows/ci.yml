@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A superseded run on the same branch is wasted work; cancel it.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: Frontend (typecheck + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - run: npm ci
+
+      # Vite transpiles with esbuild, which strips types without checking them,
+      # so the build alone would not catch a reference to a variable that does
+      # not exist. This step is the one that does.
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+  backend:
+    name: Backend (pytest)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.11 is the documented minimum; 3.12 is here so a deprecation that
+        # only bites on the newer runtime is caught before someone upgrades.
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            server/requirements.txt
+            server/requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r server/requirements.txt -r server/requirements-dev.txt
+
+      - name: Tests
+        # The suite points DATABASE_URL and the upload root at a temporary
+        # directory of its own (see server/tests/conftest.py), so it needs no
+        # database service and touches nothing in the checkout.
+        run: python -m pytest server -q

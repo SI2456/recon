@@ -72,6 +72,9 @@ npm run dev          # Vite dev server on http://localhost:5173
 npm run typecheck    # TypeScript check (the Vite build does not type-check)
 ```
 
+`npm test` runs the backend suite (`server/tests/`). CI runs the typecheck, the
+build and that suite on every pull request — see `.github/workflows/ci.yml`.
+
 ### 2. Backend
 
 ```bash

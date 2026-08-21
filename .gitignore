@@ -25,3 +25,6 @@ server/data/uploads/
 server/data/*.sqlite3
 # Synthetic demo data - reproducible from scripts/generate_gst_data.py --seed
 server/data/generated/
+
+# pytest bytecode/caches
+.pytest_cache/
