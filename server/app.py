@@ -487,7 +487,7 @@ def seed(conn: sqlite3.Connection) -> None:
         ("usr_admin_demo", "System Admin", "admin.demo@reconai.local", "admin", "", "", "", ""),
         ("usr_ca_demo", "Demo Chartered Accountant", "ca.demo@reconai.local", "ca", "", "ReconAI Audit LLP", "", "CA123456"),
         ("usr_client_demo", "Demo Client", "client.demo@reconai.local", "client", "", "ReconAI Audit LLP", "27AAACA1234F1Z5", ""),
-        ("usr_sujal_client", "Sujal Patel", "sujal.patel38833@gmail.com", "client", "", "ReconAI Audit LLP", "27AAACA1234F1Z5", ""),
+        ("usr_sujal_client", "Sujal Patel", "sujal.demo@reconai.local", "client", "", "ReconAI Audit LLP", "27AAACA1234F1Z5", ""),
     ]
     for user_id, name, email, role, phone, firm, gstin, icai in users:
         conn.execute(
@@ -496,7 +496,7 @@ def seed(conn: sqlite3.Connection) -> None:
         )
     conn.execute(
         "INSERT INTO clients VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(gstin) DO NOTHING",
-        ("cl_demo", "Sujal Patel Enterprise", "27AAACA1234F1Z5", "sujal.patel38833@gmail.com", "usr_ca_demo", "Mumbai", "Active", "Low", 92, timestamp, timestamp),
+        ("cl_demo", "Sujal Patel Enterprise", "27AAACA1234F1Z5", "sujal.demo@reconai.local", "usr_ca_demo", "Mumbai", "Active", "Low", 92, timestamp, timestamp),
     )
     conn.execute(
         "INSERT INTO settings VALUES (?, ?)",
