@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "types": ["vite/client"],
+
+    /* Vite/esbuild transpiles without type-checking, so `npm run typecheck` is
+       the only thing that ever reads this file. It is deliberately not
+       `strict`: the codebase predates it and turning strict on today would
+       bury real errors under hundreds of implicit-any reports. What is on here
+       still catches the class of bug that matters — a referenced-but-undefined
+       variable, a wrong call signature, a duplicate declaration. */
+    "strict": false,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    }
+  },
+  "include": ["src"]
+}

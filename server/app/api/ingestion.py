@@ -9,12 +9,12 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import ensure_client_scope, get_current_user, require_roles, scoped_client_ids
 from app.core import roles
-from app.db.models import Client, Invoice, PurchaseOrder, SourceType, Upload, User
+from app.db.models import AuditLog, Client, FraudAlert, Invoice, PurchaseOrder, SourceType, Upload, User
 from app.db.session import SessionLocal, get_db
 from app.services.parsing import parse_purchase_order, parse_upload
 from app.services.reconciliation import normalize_key
 from app.services.purchase_orders import link_invoices_to_orders, po_key
-from app.services.storage import read_bytes, upload_bytes
+from app.services.storage import delete_object, read_bytes, upload_bytes
 
 
 router = APIRouter()
@@ -203,7 +203,13 @@ async def upload_document(
     # A checksum makes a re-upload of the same bytes identifiable, and the
     # period metadata is what lets a GST statement be compared to anything.
     checksum = hashlib.sha256(content).hexdigest()
-    object_key = f"clients/{clientId}/uploads/{stored_name}"
+    # The checksum prefix keeps each upload's bytes distinct. Keying on the
+    # filename alone meant a second "invoice.pdf" overwrote the first, so every
+    # earlier upload with that name silently started serving the newer file —
+    # the wrong document shown beside the right document's extracted amounts.
+    # Re-uploading identical bytes still lands on the same key, which is
+    # correct: it is the same document.
+    object_key = f"clients/{clientId}/uploads/{checksum[:16]}-{stored_name}"
     upload_bytes(object_key, content, file.content_type or "application/octet-stream")
 
     # Store only — OCR/parsing runs later when the CA presses Process.
@@ -338,6 +344,53 @@ def set_visibility(
     db.commit()
     db.refresh(upload)
     return {"upload": serialize_upload(db, upload)}
+
+
+@router.delete("/uploads/{upload_id}")
+def delete_upload(
+    upload_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(roles.TAX_REVIEWER, roles.ADMIN)),
+) -> dict:
+    """Remove a document and everything parsed out of it.
+
+    The rows extracted from a document are not evidence in their own right —
+    they are that document read into the database — so deleting the file has to
+    take them with it. Leaving them behind would keep a withdrawn invoice in
+    the reconciliation counts and the supplier graph with nothing to trace it
+    back to.
+    """
+    upload = db.get(Upload, upload_id)
+    if not upload:
+        raise HTTPException(status_code=404, detail="Upload not found.")
+    ensure_client_scope(db, user, upload.client_id)
+    if upload.status == STATUS_PROCESSING:
+        raise HTTPException(status_code=409, detail="This document is being processed. Wait for it to finish.")
+
+    # Read before the delete: the row is expired once the session commits.
+    file_name = upload.file_name
+    client_id = upload.client_id
+    invoice_ids = [row.id for row in db.query(Invoice.id).filter(Invoice.upload_id == upload_id).all()]
+    if invoice_ids:
+        # Alerts point at invoices; they cannot outlive the rows they explain.
+        db.query(FraudAlert).filter(FraudAlert.invoice_id.in_(invoice_ids)).delete(synchronize_session=False)
+    db.query(Invoice).filter(Invoice.upload_id == upload_id).delete(synchronize_session=False)
+    db.query(PurchaseOrder).filter(PurchaseOrder.upload_id == upload_id).delete(synchronize_session=False)
+
+    object_key = upload.object_key
+    db.delete(upload)
+    db.add(AuditLog(actor_id=user.id, action="upload.delete", target=str(upload_id)))
+    db.commit()
+
+    # The stored bytes go last: a storage failure must not leave the database
+    # rows deleted but the row still listed, so this runs after the commit and
+    # cannot fail the request.
+    if object_key:
+        delete_object(object_key)
+
+    # An invoice can lose the order it cited, so the links are rebuilt.
+    link_invoices_to_orders(db, client_id)
+    return {"ok": True, "message": f"'{file_name}' and the records extracted from it were deleted."}
 
 
 @router.get("/purchase-orders")

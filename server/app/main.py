@@ -1,7 +1,25 @@
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import admin, auth, ca, client, clients, compat, dashboard, extract, fraud, graph, ingestion, invoices, messages, rag, reconciliation, reports
+from app.api import (
+    admin,
+    auth,
+    ca,
+    ca_requests,
+    client,
+    clients,
+    compat,
+    dashboard,
+    extract,
+    fraud,
+    graph,
+    ingestion,
+    invoices,
+    messages,
+    rag,
+    reconciliation,
+    reports,
+)
 from app.api.deps import get_current_user
 from app.api.ingestion import reset_stalled_processing
 from app.core.config import settings
@@ -27,6 +45,7 @@ def create_app() -> FastAPI:
 
     api.include_router(auth.router, prefix="/api/auth", tags=["auth"])
     api.include_router(ca.router, prefix="/api/ca", tags=["ca"])
+    api.include_router(ca_requests.router, prefix="/api/ca-change-requests", tags=["ca-change-requests"])
     api.include_router(client.router, prefix="/api/client", tags=["client"])
     api.include_router(clients.router, prefix="/api/clients", tags=["clients"])
     api.include_router(invoices.router, prefix="/api/invoices", tags=["invoices"])

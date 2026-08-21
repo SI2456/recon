@@ -1,5 +1,5 @@
-from datetime import datetime, timedelta
-import random
+from datetime import datetime, timedelta, timezone
+import secrets
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
@@ -16,11 +16,20 @@ OTP_MAX_RESENDS = 3
 
 
 def _now() -> datetime:
-    return datetime.utcnow()
+    # Naive UTC, matching the naive DateTime columns these values are compared
+    # against. datetime.utcnow() does the same thing but is deprecated in 3.12+.
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def generate_otp() -> str:
-    return f"{random.randint(0, 999999):06d}"
+    """A six-digit code from the OS cryptographic RNG.
+
+    ``random`` is a Mersenne Twister seeded from the clock: observing a handful
+    of its outputs is enough to reconstruct its state and predict every later
+    one. These codes gate email verification *and* password reset, so a
+    predictable one is an account takeover.
+    """
+    return f"{secrets.randbelow(1_000_000):06d}"
 
 
 def create_email_otp(db: Session, user: User, purpose: str, resend: bool = False) -> str:
@@ -76,7 +85,7 @@ def create_email_otp(db: Session, user: User, purpose: str, resend: bool = False
 
 
 def verify_email_otp(db: Session, email: str, otp: str, purpose: str, consume: bool = True) -> User:
-    user = db.query(User).filter(User.email == email.lower()).first()
+    user = db.query(User).filter(User.email == email.strip().lower()).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found.")
 
@@ -99,6 +108,11 @@ def verify_email_otp(db: Session, email: str, otp: str, purpose: str, consume: b
 
     record.attempts += 1
     if not verify_password(otp, record.otp_hash):
+        # The increment has to be committed on the *failure* path. Raising here
+        # leaves the route's own commit unreached, so the session rolls back on
+        # close and the counter returns to what it was — which made
+        # OTP_MAX_ATTEMPTS unenforceable and the code brute-forceable.
+        db.commit()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid OTP.")
 
     if consume:

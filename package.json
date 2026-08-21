@@ -4,17 +4,20 @@
   "version": "0.0.1",
   "type": "module",
   "scripts": {
-    "backend": "server\\venv\\Scripts\\python.exe -m uvicorn app.main:app --app-dir server --host 0.0.0.0 --port 4000 --reload",
-    "backend:install-postgres": "server\\venv\\Scripts\\python.exe -m pip install -r server/requirements-postgres.txt",
-    "backend:seed": "server\\venv\\Scripts\\python.exe server/scripts/seed.py",
+    "backend": "node server/scripts/py.js -m uvicorn app.main:app --app-dir server --host 0.0.0.0 --port 4000 --reload",
+    "backend:install": "node server/scripts/py.js -m pip install -r server/requirements.txt",
+    "backend:install-ml": "node server/scripts/py.js -m pip install -r server/requirements-ml.txt",
+    "backend:install-postgres": "node server/scripts/py.js -m pip install -r server/requirements-postgres.txt",
+    "backend:seed": "node server/scripts/py.js server/scripts/seed.py",
     "build": "vite build",
-    "db:check": "server\\venv\\Scripts\\python.exe server/scripts/check_db.py",
+    "db:check": "node server/scripts/py.js server/scripts/check_db.py",
     "db:down": "docker compose -f server/docker-compose.yml down",
     "db:init": "powershell -ExecutionPolicy Bypass -File server/scripts/init_postgres.ps1",
-    "db:migrate": "server\\venv\\Scripts\\python.exe server/scripts/migrate.py",
+    "db:migrate": "node server/scripts/py.js server/scripts/migrate.py",
     "db:up": "docker compose -f server/docker-compose.yml up -d",
     "dev": "vite",
-    "dev:full": "node server/dev-full.js"
+    "dev:full": "node server/dev-full.js",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@emotion/react": "11.14.0",
@@ -75,8 +78,11 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "4.1.12",
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
     "@vitejs/plugin-react": "4.7.0",
     "tailwindcss": "4.1.12",
+    "typescript": "5.6.3",
     "vite": "^6.4.3"
   },
   "peerDependencies": {

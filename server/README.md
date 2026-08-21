@@ -5,16 +5,18 @@ FastAPI backend for the ReconAI GST reconciliation app.
 ## Run
 
 ```bash
-cd server
-python -m venv venv
-venv\Scripts\activate
-pip install -r requirements.txt
-pip install -r requirements-postgres.txt
-cd ..
-npm run db:up
+python -m venv server/venv          # the npm scripts look for it here
+npm run backend:install             # core dependencies
+npm run backend:install-postgres    # PostgreSQL driver
+npm run backend:install-ml          # optional: scikit-learn / SHAP fraud scoring
+npm run db:up                       # optional: PostgreSQL + Redis via Docker
 npm run backend:seed
 npm run backend
 ```
+
+The `backend:*` and `db:*` scripts locate the interpreter through
+`server/scripts/py.js`, which resolves `server/venv` on Windows, macOS and
+Linux alike and falls back to `python3` on PATH when no virtualenv exists.
 
 The API starts at `http://localhost:4000`. Development now uses PostgreSQL by default:
 
@@ -135,6 +137,11 @@ Authorization: Bearer <token>
 - `PATCH /api/ingestion/uploads/{id}/visibility` (CA/admin — share with client)
 - `GET /api/ingestion/uploads` (CA sees all; client sees only shared)
 - `GET /api/client/gstin-captcha` · `POST /api/client/verify-gstin`
+- `POST /api/clients` (reviewer/admin — open a workspace)
+- `DELETE /api/clients/{id}` (admin — remove a workspace and its records)
+- `DELETE /api/ingestion/uploads/{id}` (reviewer/admin — remove a document and its parsed rows)
+- `GET /api/ca-change-requests` · `POST /api/ca-change-requests`
+- `POST /api/ca-change-requests/{id}/approve` · `POST /api/ca-change-requests/{id}/reject` (admin)
 - `POST /api/reconciliation/run`
 - `GET /api/fraud/alerts`
 - `POST /api/fraud/run`
@@ -146,4 +153,6 @@ Authorization: Bearer <token>
 - `GET /api/admin/audit-logs`
 - `GET /api/admin/system`
 
-The SQLite prototype remains in `server/app.py` for reference only; the active backend is `server/app/main.py`.
+The SQLite prototype remains in `server/app.py` for reference only; the active
+backend is `server/app/main.py`, which is what both `npm run backend` and
+`npm run dev:full` start.

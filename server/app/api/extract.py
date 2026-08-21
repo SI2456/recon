@@ -28,14 +28,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.api.deps import ensure_client_scope, get_current_user, require_roles
-from app.core.config import settings
 from app.core import roles
 from app.core.security import decode_access_token
 from app.db.models import FraudAlert, Invoice, Upload, User
 from app.db.session import get_db
 from app.services import integrity
 from app.services.reconciliation import normalize_key
-from app.services.storage import read_bytes
+from app.services.storage import UPLOAD_ROOT, read_bytes, use_object_storage
 
 
 router = APIRouter()
@@ -43,9 +42,6 @@ router = APIRouter()
 # Mounted separately at /api/uploads so the PDF viewer can reach
 # /api/uploads/file/{id}.
 files_router = APIRouter()
-
-UPLOAD_ROOT = Path(__file__).resolve().parents[3] / "server" / "data" / "uploads"
-
 
 # --- lookup -------------------------------------------------------------------
 
@@ -101,13 +97,10 @@ def _sidecar_path(upload: Upload | None) -> Path | None:
     if upload is None or not upload.object_key:
         return None
     # Object storage has no sibling files to read.
-    if settings.r2_endpoint_url and settings.r2_access_key_id:
+    if use_object_storage():
         return None
 
     stored = UPLOAD_ROOT / upload.object_key
-    if not stored.is_absolute():
-        stored = Path(upload.object_key)
-
     stem = stored.stem
     candidates = [
         stored.with_name(f"{stem}_extracted.json"),

@@ -74,7 +74,7 @@ def public_user(user: User) -> dict:
 
 @router.post("/login")
 def login(payload: LoginRequest, db: Session = Depends(get_db)) -> dict:
-    user = db.query(User).filter(User.email == payload.email.lower()).first()
+    user = db.query(User).filter(User.email == payload.email.strip().lower()).first()
     if not user or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password.")
     if not user.email_verified:
@@ -167,7 +167,7 @@ def verify_otp(payload: OtpRequest, db: Session = Depends(get_db)) -> dict:
 def resend_otp(payload: ResendOtpRequest, db: Session = Depends(get_db)) -> dict:
     if payload.purpose not in {"registration", "password_reset"}:
         raise HTTPException(status_code=400, detail="Invalid OTP purpose.")
-    user = db.query(User).filter(User.email == payload.email.lower()).first()
+    user = db.query(User).filter(User.email == payload.email.strip().lower()).first()
     if not user:
         raise HTTPException(status_code=404, detail="Account not found.")
     otp = create_email_otp(db, user, payload.purpose, resend=True)
@@ -180,7 +180,7 @@ def resend_otp(payload: ResendOtpRequest, db: Session = Depends(get_db)) -> dict
 
 @router.post("/forgot-password")
 def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db)) -> dict:
-    user = db.query(User).filter(User.email == payload.email.lower()).first()
+    user = db.query(User).filter(User.email == payload.email.strip().lower()).first()
     if not user:
         raise HTTPException(status_code=404, detail="Account not found.")
     if not user.email_verified:

@@ -1,11 +1,11 @@
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_roles
+from app.api.deps import owned_client_filter, require_roles
 from app.core import roles
 from app.db.models import CAProfile, Client, ClientProfile, User
 from app.db.session import get_db
@@ -36,7 +36,7 @@ def get_or_create_profile(db: Session, user: User) -> ClientProfile:
 
 def serialize_profile(db: Session, user: User) -> dict:
     profile = get_or_create_profile(db, user)
-    client = db.query(Client).filter((Client.email == user.email) | (Client.gstin == user.gstin)).first()
+    client = db.query(Client).filter(owned_client_filter(user)).first()
     public_gstin = "" if client and client.gstin.startswith("PENDING") else (client.gstin if client else user.gstin)
     ca = db.get(User, profile.selected_ca_id) if profile.selected_ca_id else None
     ca_profile = db.query(CAProfile).filter(CAProfile.user_id == ca.id).first() if ca else None
@@ -79,7 +79,7 @@ def assign_ca(db: Session, user: User, ca_id: int) -> dict:
     profile = get_or_create_profile(db, user)
     profile.selected_ca_id = ca.id
 
-    clients = db.query(Client).filter((Client.email == user.email) | (Client.gstin == user.gstin)).all()
+    clients = db.query(Client).filter(owned_client_filter(user)).all()
     for client in clients:
         client.ca_id = ca.id
 
@@ -110,13 +110,30 @@ async def gstin_captcha(user: User = Depends(require_roles(roles.BUSINESS_USER))
 @router.post("/verify-gstin")
 async def verify_client_gstin(payload: VerifyGstinRequest, db: Session = Depends(get_db), user: User = Depends(require_roles(roles.BUSINESS_USER))) -> dict:
     gstin = normalize_gstin(payload.gstin)
+
+    # Only the caller's *own* workspace is looked up. Matching on the submitted
+    # GSTIN as well would let any business user attach themselves to another
+    # tenant's workspace simply by verifying that tenant's GSTIN — which is a
+    # public identifier — and thereby read its invoices, uploads and alerts.
+    #
+    # Ownership is settled before the portal is called: if the number belongs to
+    # someone else's workspace, verifying it changes nothing, and asking first
+    # would waste a solved captcha on a request that cannot be granted.
+    client = db.query(Client).filter(owned_client_filter(user)).first()
+    conflict = db.query(Client).filter(Client.gstin == gstin).first()
+    if conflict is not None and (client is None or conflict.id != client.id):
+        raise HTTPException(
+            status_code=409,
+            detail="This GSTIN is already registered to another workspace. Contact your administrator.",
+        )
+
     # With a solved captcha we can fetch the full taxpayer profile (legal name,
     # address); without one we fall back to a captcha-free validity check.
     if payload.sessionId and payload.captcha:
         data = await verify_gstin_details(gstin, payload.sessionId, payload.captcha)
     else:
         data = await verify_gstin_profile(gstin)
-    client = db.query(Client).filter((Client.email == user.email) | (Client.gstin == user.gstin) | (Client.gstin == gstin)).first()
+
     if not client:
         client = Client(name=user.name, gstin=gstin, email=user.email, ca_id=None)
         db.add(client)
@@ -128,7 +145,8 @@ async def verify_client_gstin(payload: VerifyGstinRequest, db: Session = Depends
     client.gst_trade_name = data["tradeName"]
     client.gst_status = data["status"]
     client.gst_details_json = json.dumps(data, default=str)
-    client.gst_verified_at = datetime.utcnow()
+    # Naive UTC, matching the naive DateTime column. utcnow() is deprecated.
+    client.gst_verified_at = datetime.now(timezone.utc).replace(tzinfo=None)
     if legal_name:
         client.name = legal_name
 
