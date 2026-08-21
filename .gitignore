@@ -22,3 +22,5 @@ raw_response.txt
 # The uploads are real third-party invoices and must not be published.
 server/data/uploads/
 server/data/*.sqlite3
+# Synthetic demo data - reproducible from scripts/generate_gst_data.py --seed
+server/data/generated/

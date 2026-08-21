@@ -905,6 +905,7 @@ function UploadPage({ onRefresh, onVerifyDoc }: { onRefresh?: () => void; onVeri
   const [message, setMessage] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const gstInputRef = useRef<HTMLInputElement>(null);
+  const poInputRef = useRef<HTMLInputElement>(null);
 
   // Real-time green progress bar state for CA process button and upload
   const [processingId, setProcessingId] = useState<number | string | null>(null);
@@ -980,6 +981,8 @@ function UploadPage({ onRefresh, onVerifyDoc }: { onRefresh?: () => void; onVeri
       const formData = new FormData();
       formData.append("clientId", String(getClientId()));
       formData.append("source", type);
+      // documentType is what routes a purchase order away from invoice parsing.
+      formData.append("documentType", type);
       formData.append("file", file);
       await apiRequest("/api/ingestion/upload", { method: "POST", auth: true, body: formData });
 
@@ -1161,9 +1164,21 @@ function UploadPage({ onRefresh, onVerifyDoc }: { onRefresh?: () => void; onVeri
                 e.currentTarget.value = "";
               }}
             />
+            <input
+              ref={poInputRef}
+              type="file"
+              className="hidden"
+              accept=".csv,.xls,.xlsx,.pdf,.png,.jpg,.jpeg"
+              onChange={e => {
+                const file = e.target.files?.[0];
+                if (file) uploadSelectedFile(file, "purchase_order");
+                e.currentTarget.value = "";
+              }}
+            />
             <button type="button" onClick={() => fileInputRef.current?.click()} className="text-xs bg-primary text-primary-foreground px-4 py-2 rounded-md hover:bg-primary/90 transition-colors">Browse Files</button>
             <button type="button" onClick={() => setMessage("Tally connector setup will use your licensed Tally ODBC/API details.")} className="text-xs border border-border bg-card px-4 py-2 rounded-md hover:bg-muted transition-colors">Connect Tally</button>
             <button type="button" onClick={() => gstInputRef.current?.click()} className="text-xs border border-border bg-card px-4 py-2 rounded-md hover:bg-muted transition-colors">Select GSTIN Log</button>
+            <button type="button" onClick={() => poInputRef.current?.click()} title="Upload a purchase order to check invoices against what was actually ordered" className="text-xs border border-border bg-card px-4 py-2 rounded-md hover:bg-muted transition-colors">Upload Purchase Order</button>
           </div>
           {message && !processingId && <div className="text-xs text-primary mt-2">{message}</div>}
         </div>

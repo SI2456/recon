@@ -18,7 +18,7 @@ from collections import Counter
 from sqlalchemy.orm import Session
 
 from app.db.models import FraudAlert, Invoice
-from app.services import integrity
+from app.services import integrity, purchase_orders
 from app.services.integrity import Finding
 
 
@@ -251,6 +251,7 @@ def _explain_from_anomaly(scaled_row, names) -> tuple[list[str], str]:
 # Which failed check gives the alert its headline, most specific first.
 _ALERT_TYPES = {
     "duplicate": "Duplicate Invoice",
+    "purchase_order": "Purchase Order Discrepancy",
     "gstin": "Invalid Supplier GSTIN",
     "totals": "Amount / Tax Mismatch",
     "hsn": "HSN-SAC Classification",
@@ -301,11 +302,17 @@ def run_fraud_detection(db: Session, client_id: int) -> list[FraudAlert]:
 
     # Duplicate detection needs the whole set, so it runs once up front.
     duplicate_findings = integrity.check_duplicates(invoices)
+    # Order evidence, when any orders have been uploaded at all.
+    po_findings = purchase_orders.findings_for_client(db, client_id)
 
     created: list[FraudAlert] = []
     for invoice, (model_risk, chips, model_reason) in zip(invoices, scored):
         assessment = integrity.assess_invoice(invoice)
-        findings = assessment.findings + duplicate_findings.get(id(invoice), [])
+        findings = (
+            assessment.findings
+            + duplicate_findings.get(id(invoice), [])
+            + po_findings.get(invoice.id, [])
+        )
         integrity_risk = integrity.score_findings(findings)
 
         risk = max(int(model_risk), integrity_risk, _rule_floor(invoice))

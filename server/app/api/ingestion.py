@@ -9,10 +9,11 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import ensure_client_scope, get_current_user, require_roles, scoped_client_ids
 from app.core import roles
-from app.db.models import Client, Invoice, SourceType, Upload, User
+from app.db.models import Client, Invoice, PurchaseOrder, SourceType, Upload, User
 from app.db.session import SessionLocal, get_db
-from app.services.parsing import parse_upload
+from app.services.parsing import parse_purchase_order, parse_upload
 from app.services.reconciliation import normalize_key
+from app.services.purchase_orders import link_invoices_to_orders, po_key
 from app.services.storage import read_bytes, upload_bytes
 
 
@@ -23,6 +24,42 @@ STATUS_PROCESSING = "processing"
 TERMINAL_STATUSES = {"parsed", "parsed_with_warnings", "processed", "failed"}
 
 _GSTR_FILE_TYPES = {"gstr", "gstr-2a", "gstr-2b", "gstr2a", "gstr2b", "gstr1"}
+
+# Anything the uploader can call a purchase order.
+_PO_FILE_TYPES = {"po", "purchase_order", "purchase-order", "purchaseorder", "order"}
+
+
+def is_purchase_order(upload: Upload) -> bool:
+    return (
+        str(upload.file_type or "").strip().lower() in _PO_FILE_TYPES
+        or str(upload.document_type or "").strip().lower() in _PO_FILE_TYPES
+    )
+
+
+def ingest_purchase_orders(db: Session, upload: Upload, rows) -> int:
+    """Persist parsed order lines against this upload."""
+    created = 0
+    for row in rows:
+        db.add(
+            PurchaseOrder(
+                client_id=upload.client_id,
+                upload_id=upload.id,
+                po_number=row.po_number,
+                supplier=row.supplier,
+                supplier_gstin=row.supplier_gstin,
+                po_date=row.po_date,
+                hsn=row.hsn,
+                description=row.description,
+                quantity=row.quantity,
+                rate=row.rate,
+                taxable=row.taxable,
+                total=row.total,
+                currency=row.currency,
+                normalized_key=po_key(row.po_number, row.supplier_gstin),
+            )
+        )
+        created += 1
+    return created
 
 
 
@@ -68,6 +105,8 @@ _SOURCE_TYPE_BY_KIND = {
     "books": SourceType.accounting_export,
     "purchase_register": SourceType.accounting_export,
     "sales_register": SourceType.accounting_export,
+    "po": SourceType.accounting_export,
+    "purchase_order": SourceType.accounting_export,
 }
 
 
@@ -107,6 +146,7 @@ def ingest_invoices(db: Session, upload: Upload, source: str, rows) -> int:
                 cess=row.cess,
                 recipient_gstin=row.recipient_gstin,
                 place_of_supply=row.place_of_supply,
+                po_number=row.po_number,
                 document_type=row.document_type,
                 source=source,
                 normalized_key=normalize_key(row.invoice_no, row.supplier_gstin),
@@ -216,18 +256,26 @@ async def run_processing(upload_id: int) -> None:
             db.commit()
             return
 
+        purchase_order = is_purchase_order(upload)
         try:
-            rows, errors = await parse_upload(upload.file_name or "", "", content)
+            if purchase_order:
+                rows, errors = await parse_purchase_order(upload.file_name or "", content)
+            else:
+                rows, errors = await parse_upload(upload.file_name or "", "", content)
         except Exception as exc:  # noqa: BLE001 - a parser crash must not strand the row in "processing"
             upload.status = "failed"
             upload.validation_errors = json.dumps([f"Processing failed: {exc}"])
             db.commit()
             return
 
-        # Re-processing is idempotent: clear the previous run's invoices only
-        # once the new parse has succeeded, so a failure leaves the old data.
-        db.query(Invoice).filter(Invoice.upload_id == upload.id).delete()
-        parsed = ingest_invoices(db, upload, _invoice_source(upload.file_type), rows)
+        # Re-processing is idempotent: clear the previous run's rows only once
+        # the new parse has succeeded, so a failure leaves the old data.
+        if purchase_order:
+            db.query(PurchaseOrder).filter(PurchaseOrder.upload_id == upload.id).delete()
+            parsed = ingest_purchase_orders(db, upload, rows)
+        else:
+            db.query(Invoice).filter(Invoice.upload_id == upload.id).delete()
+            parsed = ingest_invoices(db, upload, _invoice_source(upload.file_type), rows)
 
         upload.parsed_rows = parsed
         upload.validation_errors = json.dumps(errors)
@@ -236,6 +284,11 @@ async def run_processing(upload_id: int) -> None:
         else:
             upload.status = "failed" if errors else "processed"
         db.commit()
+
+        # An invoice can arrive before its order or after it, so the link is
+        # rebuilt whenever either side changes.
+        if parsed:
+            link_invoices_to_orders(db, upload.client_id)
     finally:
         db.close()
 
@@ -285,6 +338,50 @@ def set_visibility(
     db.commit()
     db.refresh(upload)
     return {"upload": serialize_upload(db, upload)}
+
+
+@router.get("/purchase-orders")
+def list_purchase_orders(db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict:
+    """Uploaded orders, each with the invoice raised against it, if any."""
+    client_ids = scoped_client_ids(db, user)
+    if not client_ids:
+        return {"purchaseOrders": []}
+
+    orders = (
+        db.query(PurchaseOrder)
+        .filter(PurchaseOrder.client_id.in_(client_ids))
+        .order_by(PurchaseOrder.created_at.desc())
+        .all()
+    )
+    billed = {}
+    for invoice in db.query(Invoice).filter(Invoice.po_id.isnot(None)).all():
+        billed.setdefault(invoice.po_id, []).append(invoice)
+
+    return {
+        "purchaseOrders": [
+            {
+                "id": order.id,
+                "clientId": order.client_id,
+                "poNumber": order.po_number,
+                "supplier": order.supplier,
+                "supplierGstin": order.supplier_gstin,
+                "poDate": order.po_date,
+                "hsn": order.hsn,
+                "description": order.description,
+                "quantity": order.quantity,
+                "rate": order.rate,
+                "taxable": order.taxable,
+                "total": order.total,
+                "status": order.status,
+                "billedInvoices": [
+                    {"id": inv.id, "invoiceNo": inv.invoice_no, "total": inv.total}
+                    for inv in billed.get(order.id, [])
+                ],
+                "billedTotal": round(sum(inv.total or 0 for inv in billed.get(order.id, [])), 2),
+            }
+            for order in orders
+        ]
+    }
 
 
 @router.get("/uploads")

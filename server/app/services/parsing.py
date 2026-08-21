@@ -43,12 +43,37 @@ class ParsedInvoice:
     cess: float = 0.0
     recipient_gstin: str = ""
     place_of_supply: str = ""
+    po_number: str = ""
     document_type: str = "invoice"
     warnings: list[str] = field(default_factory=list)
 
     def is_usable(self) -> bool:
         # A row needs at least an invoice number and a value to be reconcilable.
         return bool(self.invoice_no) and self.total > 0
+
+
+@dataclass
+class ParsedPurchaseOrder:
+    """A purchase order line, normalised the same way invoices are.
+
+    Deliberately has no tax fields: an order is not a tax document. What
+    matters for reconciliation is who was ordered from, for how much.
+    """
+
+    po_number: str
+    supplier: str
+    supplier_gstin: str
+    po_date: str
+    total: float
+    taxable: float = 0.0
+    hsn: str = ""
+    description: str = ""
+    quantity: float = 0.0
+    rate: float = 0.0
+    currency: str = "INR"
+
+    def is_usable(self) -> bool:
+        return bool(self.po_number) and self.total > 0
 
 
 # --- header synonyms ---------------------------------------------------------
@@ -68,6 +93,11 @@ _COLUMN_SYNONYMS: dict[str, tuple[str, ...]] = {
     "hsn": ("hsn", "hsncode", "hsnsac", "hsnsaccode", "sac", "saccode", "hsn_sc", "hsnsc", "chapterheading", "tariffcode"),
     "recipient_gstin": ("recipient_gstin", "recipientgstin", "buyergstin", "buyergstinno", "customergstin", "gstinofrecipient", "ourgstin"),
     "place_of_supply": ("place_of_supply", "placeofsupply", "pos", "posstate", "supplystate", "statecode"),
+    "po_number": ("po_number", "ponumber", "pono", "po", "purchaseorder", "purchaseorderno",
+                  "purchaseordernumber", "orderno", "ordernumber", "ponum"),
+    "quantity": ("quantity", "qty", "units", "nos", "count"),
+    "rate": ("rate", "unitrate", "unitprice", "price", "rateperunit"),
+    "description": ("description", "item", "itemdescription", "particulars", "product", "goods"),
 }
 
 _GSTIN_PATTERN = re.compile(r"[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]")
@@ -214,6 +244,7 @@ def _row_from_mapped(record: dict, header_map: dict[str, str]) -> ParsedInvoice:
         cess=cess,
         recipient_gstin=_clean_gstin(get("recipient_gstin")),
         place_of_supply=_clean_pos(get("place_of_supply")),
+        po_number=str(get("po_number") or "").strip()[:80],
     )
 
 
@@ -242,6 +273,102 @@ def parse_csv(content: bytes) -> tuple[list[ParsedInvoice], list[str]]:
             continue
         rows.append(row)
     return rows, errors
+
+
+# --- purchase orders ---------------------------------------------------------
+
+
+def parse_purchase_order_csv(content: bytes) -> tuple[list[ParsedPurchaseOrder], list[str]]:
+    errors: list[str] = []
+    text = content.decode("utf-8-sig", errors="replace")
+    reader = csv.DictReader(io.StringIO(text))
+    if not reader.fieldnames:
+        return [], ["The purchase order file is empty or has no header row."]
+
+    header_map = _build_header_map(list(reader.fieldnames))
+    if "po_number" not in header_map:
+        return [], [
+            "Could not find a purchase-order number column. Headers seen: "
+            f"{', '.join(reader.fieldnames)}."
+        ]
+
+    rows: list[ParsedPurchaseOrder] = []
+    for line_no, record in enumerate(reader, start=2):
+        def get(name: str):
+            header = header_map.get(name)
+            return record.get(header) if header else None
+
+        quantity = _to_float(get("quantity"))
+        rate = _to_float(get("rate"))
+        taxable = _to_float(get("taxable"))
+        total = _to_float(get("total"))
+        # An order line often states only quantity and rate.
+        if total == 0 and quantity and rate:
+            total = round(quantity * rate, 2)
+        if taxable == 0:
+            taxable = total
+
+        row = ParsedPurchaseOrder(
+            po_number=str(get("po_number") or "").strip()[:80],
+            supplier=str(get("supplier") or "").strip(),
+            supplier_gstin=_clean_gstin(get("supplier_gstin")),
+            po_date=_normalize_date(get("invoice_date")),
+            total=total,
+            taxable=taxable,
+            hsn=_clean_hsn(get("hsn")),
+            description=str(get("description") or "").strip()[:255],
+            quantity=quantity,
+            rate=rate,
+        )
+        if not row.po_number and total == 0:
+            continue  # blank line
+        if not row.is_usable():
+            errors.append(f"Row {line_no}: skipped (missing PO number or value).")
+            continue
+        rows.append(row)
+    return rows, errors
+
+
+async def parse_purchase_order(filename: str, content: bytes) -> tuple[list[ParsedPurchaseOrder], list[str]]:
+    """Read a purchase order from a spreadsheet export or a scanned document."""
+    name = (filename or "").lower()
+    if name.endswith((".csv", ".tsv")):
+        return parse_purchase_order_csv(content)
+
+    # A PDF or image order goes through the same vision pipeline as invoices;
+    # extract.py already surfaces order_info.po_number.
+    if name.endswith(_IMAGE_EXTENSIONS):
+        pages = [content]
+    elif name.endswith(".pdf") or content[:5] == b"%PDF-":
+        pages, render_error = _render_pdf_to_images(content)
+        if render_error:
+            return [], [f"Could not render the purchase order for OCR: {render_error}"]
+    else:
+        return [], [f"Unsupported purchase-order file '{filename}'. Upload a CSV, PDF or image."]
+
+    try:
+        data = await extract_invoice_from_pages(pages)
+    except httpx.HTTPError:
+        return [], [_vlm_unavailable_message()]
+
+    order = data.get("order_info") if isinstance(data.get("order_info"), dict) else {}
+    amounts = data.get("amount_summary") if isinstance(data.get("amount_summary"), dict) else {}
+    supplier = data.get("supplier") if isinstance(data.get("supplier"), dict) else {}
+
+    total = _to_float(amounts.get("grand_total") or data.get("total"))
+    row = ParsedPurchaseOrder(
+        po_number=str(order.get("po_number") or data.get("invoice_number") or "").strip()[:80],
+        supplier=str(supplier.get("name") or "").strip(),
+        supplier_gstin=_clean_gstin(supplier.get("gstin")),
+        po_date=_normalize_date(data.get("invoice_date")),
+        total=total,
+        taxable=_to_float(amounts.get("subtotal")) or total,
+        hsn=_clean_hsn(data.get("hsn") or "") or _hsn_from_line_items(data),
+        description=str(data.get("document_title") or "").strip()[:255],
+    )
+    if not row.is_usable():
+        return [], ["Could not read a purchase-order number and value from this document."]
+    return [row], []
 
 
 # --- GSTR JSON ---------------------------------------------------------------
@@ -286,17 +413,27 @@ def parse_gstr_json(content: bytes) -> tuple[list[ParsedInvoice], list[str]]:
         for inv in invoices:
             if not isinstance(inv, dict):
                 continue
-            items = inv.get("itms") if isinstance(inv.get("itms"), list) else []
+            # GSTR-2A nests each line under "itms" -> "itm_det" with the tax
+            # columns abbreviated (iamt/camt/samt/csamt). GSTR-2B uses "items"
+            # with the amounts spelled out flat (igst/cgst/sgst/cess). Both are
+            # accepted, because 2B is the statement reconciliation actually
+            # runs against and reading only the 2A shape left every 2B row with
+            # a zero taxable value.
+            raw_items = inv.get("itms")
+            if not isinstance(raw_items, list):
+                raw_items = inv.get("items")
+            items = raw_items if isinstance(raw_items, list) else []
+
             taxable = gst = 0.0
             igst = cgst = sgst = cess = 0.0
             hsn = ""
             for item in items:
                 det = item.get("itm_det", item) if isinstance(item, dict) else {}
                 taxable += _to_float(det.get("txval"))
-                igst += _to_float(det.get("iamt"))
-                cgst += _to_float(det.get("camt"))
-                sgst += _to_float(det.get("samt"))
-                cess += _to_float(det.get("csamt"))
+                igst += _to_float(det.get("iamt") if det.get("iamt") is not None else det.get("igst"))
+                cgst += _to_float(det.get("camt") if det.get("camt") is not None else det.get("cgst"))
+                sgst += _to_float(det.get("samt") if det.get("samt") is not None else det.get("sgst"))
+                cess += _to_float(det.get("csamt") if det.get("csamt") is not None else det.get("cess"))
                 gst = igst + cgst + sgst + cess
                 # A GSTR line can carry several HSNs; the first identifies the
                 # principal supply, which is what the rate check needs.
@@ -558,6 +695,11 @@ def _row_from_vlm(data: dict) -> ParsedInvoice:
             buyer.get("gstin") or data.get("recipient_gstin") or data.get("buyer_gstin") or ""
         ),
         place_of_supply=_clean_pos(data.get("place_of_supply")),
+        po_number=str(
+            (data.get("order_info") or {}).get("po_number")
+            if isinstance(data.get("order_info"), dict) else ""
+            or data.get("po_number") or ""
+        ).strip()[:80],
     )
 
 

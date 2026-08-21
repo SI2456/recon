@@ -117,18 +117,27 @@ def run_reconciliation(db: Session, client_id: int, user_id: int) -> dict:
     for invoice in unmatched:
         # Pass 2: fuzzy match against remaining GSTR invoices from the same supplier.
         candidate, score = _best_fuzzy_partner(invoice, gstr_by_gstin.get(invoice.supplier_gstin, []), used_gstr)
-        if candidate and score >= INVOICE_SIMILARITY_THRESHOLD:
+        # A fuzzy pairing must agree on the amount as well as the number.
+        #
+        # Sequential numbering makes a supplier's own invoices highly similar to
+        # each other — "HIG/26-27/00312" and "HIG/26-27/00412" score about 92% —
+        # so similarity alone will pair an invoice the supplier never filed with
+        # some *other* invoice's counterpart. That does double damage: the
+        # unfiled invoice is reported as a mere amount mismatch, and the invoice
+        # whose counterpart was stolen is reported as missing.
+        #
+        # Fuzzy matching exists for a mistyped or misread invoice *number*; the
+        # value should still line up. When it does not, leaving the invoice
+        # unmatched is the safer answer — "missing" sends it for review, whereas
+        # a false pairing hides a genuine non-filing and corrupts a good record.
+        if candidate and score >= INVOICE_SIMILARITY_THRESHOLD and _amounts_match(
+            invoice.total or 0, candidate.total or 0
+        ):
             used_gstr.add(candidate.id)
-            if _amounts_match(invoice.total or 0, candidate.total or 0):
-                invoice.status = candidate.status = "Matched"
-                invoice.risk = "Low"
-                summary["matched"] += 1
-                summary["fuzzyMatched"] += 1
-            else:
-                # Invoice number lines up but the value does not — a real mismatch.
-                invoice.status = candidate.status = "Mismatched"
-                invoice.risk = candidate.risk = "Medium"
-                summary["mismatched"] += 1
+            invoice.status = candidate.status = "Matched"
+            invoice.risk = "Low"
+            summary["matched"] += 1
+            summary["fuzzyMatched"] += 1
             continue
 
         # No counterpart at all: present in books, absent from GSTR.

@@ -79,6 +79,8 @@ _ADDITIVE_COLUMNS: dict[str, dict[str, str]] = {
         "recipient_gstin": "VARCHAR(20) NOT NULL DEFAULT ''",
         "place_of_supply": "VARCHAR(4) NOT NULL DEFAULT ''",
         "document_type": "VARCHAR(24) NOT NULL DEFAULT 'invoice'",
+        "po_number": "VARCHAR(80) NOT NULL DEFAULT ''",
+        "po_id": "INTEGER",
     },
     "fraud_alerts": {"findings_json": "TEXT NOT NULL DEFAULT '[]'"},
 }

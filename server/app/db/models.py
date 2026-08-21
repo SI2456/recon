@@ -155,6 +155,9 @@ class Invoice(Base):
     cess: Mapped[float] = mapped_column(Float, default=0)
     total: Mapped[float] = mapped_column(Float, default=0)
     hsn: Mapped[str] = mapped_column(String(12), default="")
+    # The purchase order this invoice was raised against, when it cites one.
+    po_number: Mapped[str] = mapped_column(String(80), default="", index=True)
+    po_id: Mapped[int] = mapped_column(ForeignKey("purchase_orders.id"), nullable=True)
     recipient_gstin: Mapped[str] = mapped_column(String(20), default="")
     place_of_supply: Mapped[str] = mapped_column(String(4), default="")
     document_type: Mapped[str] = mapped_column(String(24), default="invoice")
@@ -162,6 +165,40 @@ class Invoice(Base):
     status: Mapped[str] = mapped_column(String(40), default="Pending")
     risk: Mapped[str] = mapped_column(String(40), default="Low")
     normalized_key: Mapped[str] = mapped_column(String(180), index=True)
+
+
+class PurchaseOrder(Base):
+    """An order placed with a supplier, before any supply happens.
+
+    Kept in its own table rather than folded into ``invoices``: a purchase
+    order is not a tax document. It carries no GST, is never reconciled against
+    a GST return, and would distort reconciliation counts, fraud scoring and
+    the supplier graph if it were treated as an invoice.
+
+    Its value is as evidence. An invoice billed well above the order it cites
+    is the paper trail of an inflated claim, which no amount of checking the
+    invoice against itself can reveal.
+    """
+
+    __tablename__ = "purchase_orders"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.id"), index=True)
+    upload_id: Mapped[int] = mapped_column(ForeignKey("uploads.id"), nullable=True)
+    po_number: Mapped[str] = mapped_column(String(80), index=True)
+    supplier: Mapped[str] = mapped_column(String(180), default="")
+    supplier_gstin: Mapped[str] = mapped_column(String(20), default="", index=True)
+    po_date: Mapped[str] = mapped_column(String(20), default="")
+    hsn: Mapped[str] = mapped_column(String(12), default="")
+    description: Mapped[str] = mapped_column(String(255), default="")
+    quantity: Mapped[float] = mapped_column(Float, default=0)
+    rate: Mapped[float] = mapped_column(Float, default=0)
+    taxable: Mapped[float] = mapped_column(Float, default=0)
+    total: Mapped[float] = mapped_column(Float, default=0)
+    currency: Mapped[str] = mapped_column(String(10), default="INR")
+    status: Mapped[str] = mapped_column(String(40), default="Open")
+    normalized_key: Mapped[str] = mapped_column(String(180), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
 class ReconciliationJob(Base):
