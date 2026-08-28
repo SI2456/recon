@@ -136,7 +136,12 @@ def graph(clientId: int = Query(...), db: Session = Depends(get_db), user: User 
             "suspicious": is_suspicious,
         })
 
-    itc_at_risk = round(sum(c["itc"] for c in cycles), 2)
+    # Summed over the distinct suspicious edges, not over the cycles. One edge
+    # can lie on several rings — A->B belongs to both A->B->C->A and
+    # A->B->D->A — and adding the per-cycle totals counts its GST once per ring.
+    # This figure is the headline "ITC at risk" a reviewer would quote, so
+    # overstating it is worse than reporting nothing.
+    itc_at_risk = round(sum(edge_map[pair]["gst"] for pair in suspicious_edges if pair in edge_map), 2)
     return {
         "nodes": list(nodes.values()),
         "edges": edges,

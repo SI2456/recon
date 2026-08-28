@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import date
 from types import SimpleNamespace
 
-from app.api.dashboard import build_monthly_series
+from app.api.dashboard import build_monthly_series, build_supplier_risk
 from app.services import integrity
 from app.services.parsing import _row_from_vlm
 from helpers import make_gstin
@@ -136,3 +136,43 @@ class TestExtractPipelineGstin:
 
         for code in sorted(integrity._VALID_STATE_CODES):
             assert code in extract.STATE_CODES, code
+
+
+def _alert(entity: str, risk: int, amount: float, reason: str = ""):
+    return SimpleNamespace(entity=entity, risk=risk, amount=amount, reason=reason)
+
+
+class TestSupplierRisk:
+    """The panel is titled "Top Supplier Risk Ranking", so it has to be one row
+    per supplier, ranked. It used to be one row per alert, unordered."""
+
+    def test_one_row_per_supplier_not_per_alert(self):
+        rows = build_supplier_risk(
+            [_alert("Apex", 70, 1000), _alert("Apex", 40, 500), _alert("Northstar", 60, 900)]
+        )
+        assert [row["supplier"] for row in rows] == ["Apex", "Northstar"]
+
+    def test_a_supplier_carries_their_worst_risk_and_total_exposure(self):
+        rows = build_supplier_risk([_alert("Apex", 70, 1000), _alert("Apex", 40, 500)])
+        assert rows[0]["risk"] == 70
+        assert rows[0]["amount"] == 1500
+        assert rows[0]["invoices"] == 2
+
+    def test_rows_are_ranked_by_risk(self):
+        rows = build_supplier_risk(
+            [_alert("Low", 20, 10), _alert("Worst", 90, 10), _alert("Middle", 55, 10)]
+        )
+        assert [row["supplier"] for row in rows] == ["Worst", "Middle", "Low"]
+
+    def test_the_reason_shown_is_the_one_that_ranked_them(self):
+        rows = build_supplier_risk(
+            [_alert("Apex", 30, 10, "minor"), _alert("Apex", 80, 10, "fabricated GSTIN")]
+        )
+        assert rows[0]["reason"] == "fabricated GSTIN"
+
+    def test_an_unnamed_supplier_is_labelled_not_dropped(self):
+        rows = build_supplier_risk([_alert("", 50, 10)])
+        assert rows[0]["supplier"] == "Unknown supplier"
+
+    def test_no_alerts_yields_no_rows(self):
+        assert build_supplier_risk([]) == []

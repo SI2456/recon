@@ -12,6 +12,7 @@ Fuzzy matching uses RapidFuzz when available and falls back to the stdlib
 ``difflib`` ratio so the module keeps working without the dependency.
 """
 
+import json
 import re
 from collections import defaultdict
 
@@ -145,7 +146,11 @@ def run_reconciliation(db: Session, client_id: int, user_id: int) -> dict:
         invoice.risk = "Medium"
         summary["missing"] += 1
 
-    job = ReconciliationJob(client_id=client_id, run_by=user_id, status="completed", summary_json=str(summary))
+    # json.dumps, not str(): a Python repr uses single quotes, so the column
+    # named summary_json held text that json.loads cannot read back.
+    job = ReconciliationJob(
+        client_id=client_id, run_by=user_id, status="completed", summary_json=json.dumps(summary)
+    )
     db.add(job)
     db.commit()
     return {"jobId": job.id, "status": "completed", "summary": summary}

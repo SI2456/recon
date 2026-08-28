@@ -291,10 +291,15 @@ def run_fraud_detection(db: Session, client_id: int) -> list[FraudAlert]:
     if not invoices:
         return []
 
-    existing_invoice_ids = {
-        item.invoice_id
-        for item in db.query(FraudAlert.invoice_id).filter(FraudAlert.client_id == client_id).all()
-    }
+    # Keyed by invoice so an existing alert can be refreshed rather than
+    # skipped. Correcting a misread invoice in the verification screen and
+    # re-running is the normal workflow, and the alert has to follow the
+    # correction — otherwise the reviewer fixes a bad OCR read and the alert
+    # still accuses the invoice of the defect that was just corrected.
+    existing_alerts: dict[int, FraudAlert] = {}
+    for alert in db.query(FraudAlert).filter(FraudAlert.client_id == client_id).all():
+        if alert.invoice_id is not None and alert.invoice_id not in existing_alerts:
+            existing_alerts[alert.invoice_id] = alert
 
     scored = _score_with_ml(invoices)
     if scored is None:
@@ -306,6 +311,7 @@ def run_fraud_detection(db: Session, client_id: int) -> list[FraudAlert]:
     po_findings = purchase_orders.findings_for_client(db, client_id)
 
     created: list[FraudAlert] = []
+    refreshed: list[FraudAlert] = []
     for invoice, (model_risk, chips, model_reason) in zip(invoices, scored):
         assessment = integrity.assess_invoice(invoice)
         findings = (
@@ -318,9 +324,27 @@ def run_fraud_detection(db: Session, client_id: int) -> list[FraudAlert]:
         risk = max(int(model_risk), integrity_risk, _rule_floor(invoice))
         risk = int(max(0, min(100, risk)))
 
-        if invoice.id in existing_invoice_ids:
-            continue
         reportable = [f for f in findings if f.weight >= REPORTABLE_FINDING_WEIGHT]
+        existing = existing_alerts.get(invoice.id)
+
+        if existing is not None:
+            # Refresh what the evidence says, in place. `status` is deliberately
+            # untouched: it is the reviewer's triage decision, not a model
+            # output, and a re-run must not reopen something they closed.
+            #
+            # An alert that no longer qualifies is updated rather than deleted —
+            # its risk simply drops, which is the honest record. Deleting it
+            # would silently discard a case a reviewer may have been working.
+            existing.type = _alert_type(findings)
+            existing.entity = invoice.supplier
+            existing.risk = risk
+            existing.amount = invoice.total
+            existing.reason = _combined_reason(findings, model_reason)
+            existing.shap_json = json.dumps(chips)
+            existing.findings_json = json.dumps([f.as_dict() for f in findings])
+            refreshed.append(existing)
+            continue
+
         if risk < ALERT_THRESHOLD and not reportable:
             continue
 
@@ -339,4 +363,6 @@ def run_fraud_detection(db: Session, client_id: int) -> list[FraudAlert]:
         created.append(alert)
 
     db.commit()
-    return created
+    # Both the new and the re-scored alerts, so a re-run reports what it did
+    # instead of coming back empty and looking like it found nothing.
+    return created + refreshed
