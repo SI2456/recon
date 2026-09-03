@@ -90,6 +90,36 @@ def build_monthly_series(invoices: list[Invoice], today: date | None = None) -> 
     return series
 
 
+def build_supplier_risk(alerts: list[FraudAlert]) -> list[dict]:
+    """One row per supplier, ranked by risk — what "Top Supplier Risk" means.
+
+    This used to emit one row per *alert*, so a supplier with three alerts
+    appeared three times in a ranking, each row showing that single alert's
+    amount rather than the supplier's exposure, in whatever order the query
+    returned. Aggregating gives the panel the figure it claims to show: the
+    worst risk seen for that supplier, the total amount across their flagged
+    invoices, and how many there are.
+    """
+    by_supplier: dict[str, dict] = {}
+    for alert in alerts:
+        name = (alert.entity or "").strip() or "Unknown supplier"
+        row = by_supplier.setdefault(
+            name, {"supplier": name, "risk": 0, "amount": 0.0, "invoices": 0, "reason": ""}
+        )
+        row["invoices"] += 1
+        row["amount"] += float(alert.amount or 0)
+        # The worst finding is what ranks a supplier, so its reason is the one
+        # worth showing beside them.
+        if (alert.risk or 0) >= row["risk"]:
+            row["risk"] = int(alert.risk or 0)
+            row["reason"] = alert.reason or ""
+
+    ranked = sorted(by_supplier.values(), key=lambda row: (-row["risk"], -row["amount"], row["supplier"]))
+    for row in ranked:
+        row["amount"] = round(row["amount"], 2)
+    return ranked
+
+
 @router.get("")
 def dashboard(
     clientId: int | None = Query(None, description="Narrow every figure to one workspace"),
@@ -115,5 +145,5 @@ def dashboard(
             "highRiskTransactions": len([item for item in alerts if item.risk >= 70]),
         },
         "monthlyData": build_monthly_series(invoices),
-        "supplierRisk": [{"supplier": item.entity, "risk": item.risk, "amount": item.amount, "reason": item.reason} for item in alerts],
+        "supplierRisk": build_supplier_risk(alerts),
     }

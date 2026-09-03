@@ -70,14 +70,16 @@ async function fetchAllData(onUpdate: () => void, selectedClientId?: string): Pr
     const dash = await apiRequest<{
       kpis: Record<string, number | null>;
       monthlyData: { month: string; matched: number; mismatched: number; duplicates: number }[];
-      supplierRisk: { supplier: string; risk: number; amount: number; reason: string }[];
+      supplierRisk: { supplier: string; risk: number; amount: number; invoices: number; reason: string }[];
     }>(`/api/dashboard${queryParam}`, { auth: true });
     monthlyData = dash.monthlyData || [];
     dashboardKpis = dash.kpis || {};
     supplierRisk = (dash.supplierRisk || []).map(s => ({
       supplier: s.supplier,
       risk: s.risk,
-      invoices: 0,
+      // The real count from the backend. This was hardcoded to 0, so the
+      // ranking always read "0 invoices" next to every supplier.
+      invoices: s.invoices ?? 0,
       amount: `₹${Number(s.amount || 0).toLocaleString("en-IN")}`,
     }));
     onUpdate();
